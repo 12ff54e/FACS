@@ -80,12 +80,12 @@ struct Integrator {
 };
 
 template <typename T, typename F>
-auto integrateLinearHomogeneous2(const F& coef,
-                                 T t0,
-                                 T t1,
-                                 T f0,
-                                 T f0_prime,
-                                 std::size_t steps) {
+auto integrate_linear_Homogeneous_2(const F& coef,
+                                    T t0,
+                                    T t1,
+                                    T f0,
+                                    T f0_prime,
+                                    std::size_t steps) {
     struct State {
         using value_type = T;
         // exploite complex as a 2D linear space
@@ -131,7 +131,7 @@ auto integrateLinearHomogeneous2(const F& coef,
     //     if (t0 >= t1) { break; }
     // }
 
-    return state.f.real();
+    return std::make_pair(state.f.real(), state.f.imag());
 }
 
 #endif  // INTEGRATOR_H
