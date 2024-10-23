@@ -1,11 +1,22 @@
-#include <cmath>  // ceil, floor
+#include <algorithm>  // lower_bound, upper_bound
+#include <cmath>      // ceil, floor
 #include <iostream>
-#include <numbers>
+#include <numbers>  // pi
+#include <unordered_map>
 
 #include "Floquet.h"
 #include "equilibrium.h"
 #include "integrator.h"
-#include "intp.h"
+
+// inject hash function for pair of int
+namespace std {
+template <>
+struct hash<pair<int, int>> {
+    auto operator()(const pair<int, int>& p) const noexcept {
+        return hash<int>{}(p.first) ^ (hash<int>{}(p.second) << 1);
+    }
+};
+};  // namespace std
 
 int main() {
     using namespace std::complex_literals;
@@ -25,9 +36,10 @@ int main() {
     constexpr double max_omega = 1.2;
 
     // toroidal mode numbers
-    std::array ns{2, 3, 5, 6, 8, 11, 13};
+    std::vector<int> ns{2, 3, 5, 6, 8, 11, 13};
+    // poloidal mode numbers
+    std::vector<std::vector<std::pair<int, int>>> m_ranges(radial_count);
     std::vector<std::vector<double>> continuum(radial_count);
-    std::vector<std::array<std::size_t, ns.size()>> m_count(radial_count);
 
     for (std::size_t i = 0; i < radial_count; ++i) {
         // TODO: Need some refinement around stability boundary
@@ -86,46 +98,60 @@ int main() {
         for (std::size_t n_idx = 0; n_idx < ns.size(); ++n_idx) {
             auto n = ns[n_idx];
             std::size_t m_num = 0;
-            for (int m = std::ceil(n * local_q - local_nu.back().real());
-                 m <= std::floor(n * local_q + local_nu.back().real()); ++m) {
-                double kp = std::abs(n * local_q - m);
+            const int m_lower = std::ceil(n * local_q - local_nu.back().real());
+            const int m_upper =
+                std::floor(n * local_q + local_nu.back().real());
+            m_ranges[i].emplace_back(m_lower, m_upper);
+
+            for (int m = m_lower; m <= m_upper; ++m) {
+                const double kp = n * local_q - m;
                 auto it = std::lower_bound(
-                    local_nu.begin(), local_nu.end(), kp,
+                    local_nu.begin(), local_nu.end(), std::abs(kp),
                     [](auto nu_c, auto k) { return std::real(nu_c) < k; });
-                if (it != local_nu.end() && it != local_nu.begin()) {
+                if (kp > 0. && 2 * kp - std::round(2 * kp) < 1.e-7) {
+                    // accumulation point
+                    it = std::upper_bound(
+                        local_nu.begin(), local_nu.end(), std::abs(kp),
+                        [](auto k, auto nu_c) { return k < std::real(nu_c); });
+                }
+                if (it == local_nu.begin()) {
+                    continuum[i].push_back(0.);
+                } else if (it != local_nu.end()) {
                     continuum[i].push_back(
                         (it - local_nu.begin() +
-                         (kp - (it - 1)->real()) /
+                         (std::abs(kp) - (it - 1)->real()) /
                              (it->real() - (it - 1)->real())) *
                         domega_global);
-                    ++m_num;
                 }
             }
-            m_count[i][n_idx] = m_num;
         }
     }
 
-    // output, in handcrafted JSON format
-    {
-        auto& os = std::cout;
-        os << '[';
-        for (std::size_t i = 0; i < radial_count; ++i) {
-            os << '[';
-            std::size_t idx = 0;
-            for (std::size_t j = 0; j < ns.size(); ++j) {
-                os << '[';
-                for (std::size_t k = idx; k < idx + m_count[i][j]; ++k) {
-                    os << continuum[i][k];
-                    if (k != idx + m_count[i][j] - 1) { os << ','; }
-                }
-                idx += m_count[i][j];
-                os << ']';
-                if (j != ns.size() - 1) { os << ','; }
+    // sort by (n,m) to individual lines
+    // TODO: Sort by Floquet exponent
+    std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
+        lines;
+
+    for (std::size_t i = 0; i < radial_count; ++i) {
+        const auto r =
+            a * static_cast<double>(i) / static_cast<double>(radial_count);
+        std::size_t offset = 0;
+        for (std::size_t j = 0; j < ns.size(); ++j) {
+            auto [m_lower, m_upper] = m_ranges[i][j];
+            for (int k = 0; k <= m_upper - m_lower; ++k) {
+                lines[std::make_pair(ns[j], k + m_lower)].push_back(
+                    {r, continuum[i][k + offset]});
             }
-            os << ']';
-            if (i != radial_count - 1) { os << ','; }
+            offset += m_upper - m_lower + 1;
         }
-        os << ']';
     }
+    // output
+    for (auto& line : lines) {
+        const auto& [nm, coords] = line;
+        std::cout << nm.first << ' ' << nm.second << ' ';
+        for (auto pt : coords) { std::cout << pt[0] << ' ' << pt[1] << ' '; }
+        std::cout << '\n';
+    }
+
     return 0;
 }
