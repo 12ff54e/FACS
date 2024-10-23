@@ -25,7 +25,7 @@ struct FloquetMatrix {
         auto del = std::sqrt(
             std::complex<value_type>{std::pow(a11 - a22, 2) + 4 * a12 * a21});
         auto tr = a11 + a22;
-        return .5 * (tr - del);
+        return .5 * (tr + del);
     }
 
    private:
