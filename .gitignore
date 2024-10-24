@@ -3,3 +3,6 @@ build
 # vim swap files
 *.swp
 *.swo
+
+# tags
+tags

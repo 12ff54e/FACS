@@ -21,7 +21,7 @@ struct hash<pair<int, int>> {
 int main() {
     using namespace std::complex_literals;
 
-    constexpr double a = 0.2;
+    constexpr double a = 0.1;
     const auto q = [](double r) { return 1.71 + 0.16 * r * r / (a * a); };
     const auto dp = [](double r) { return 0.; };  // ad hoc expression
 
@@ -29,14 +29,14 @@ int main() {
 
     const AnalyticEquilibrium ITPA_EQ(q, dp);
 
-    constexpr std::size_t radial_count = 100;
+    constexpr std::size_t radial_count = 138;
     constexpr std::size_t omega_count = 300;
     // this value is normalized to $v_{A,0}/(q_min*R_0)$, somewhere between 2nd
     // and 3rd gap for all r, in ITPA case
     constexpr double max_omega = 1.2;
 
     // toroidal mode numbers
-    std::vector<int> ns{2, 3, 5, 6, 8, 11, 13};
+    std::vector<int> ns{3, 5, 6, 8, 11, 13};
     // poloidal mode numbers
     std::vector<std::vector<std::pair<int, int>>> m_ranges(radial_count);
     std::vector<std::vector<double>> continuum(radial_count);
@@ -44,7 +44,7 @@ int main() {
     for (std::size_t i = 0; i < radial_count; ++i) {
         // TODO: Need some refinement around stability boundary
         const auto r =
-            a * static_cast<double>(i) / static_cast<double>(radial_count);
+            a * static_cast<double>(i) / static_cast<double>(radial_count - 1);
         const auto local_q = ITPA_EQ.q(r);
 
         std::vector<std::complex<double>> local_nu;
@@ -127,22 +127,42 @@ int main() {
         }
     }
 
-    // sort by (n,m) to individual lines
-    // TODO: Sort by Floquet exponent
+    // sort by (n,m) or (n, \nu) to individual lines
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
         lines;
-
-    for (std::size_t i = 0; i < radial_count; ++i) {
-        const auto r =
-            a * static_cast<double>(i) / static_cast<double>(radial_count);
-        std::size_t offset = 0;
-        for (std::size_t j = 0; j < ns.size(); ++j) {
-            auto [m_lower, m_upper] = m_ranges[i][j];
-            for (int k = 0; k <= m_upper - m_lower; ++k) {
-                lines[std::make_pair(ns[j], k + m_lower)].push_back(
-                    {r, continuum[i][k + offset]});
+    const bool sort_by_m = false;
+    if (sort_by_m) {
+        // To be deprecated
+        for (std::size_t i = 0; i < radial_count; ++i) {
+            std::size_t offset = 0;
+            for (std::size_t j = 0; j < ns.size(); ++j) {
+                auto [m_lower, m_upper] = m_ranges[i][j];
+                for (int k = 0; k <= m_upper - m_lower; ++k) {
+                    lines[std::make_pair(ns[j], k + m_lower)].push_back(
+                        {a * static_cast<double>(i) /
+                             static_cast<double>(radial_count),
+                         continuum[i][k + offset]});
+                }
+                offset += m_upper - m_lower + 1;
             }
-            offset += m_upper - m_lower + 1;
+        }
+    } else {
+        // sort by Floquet exponent
+        for (std::size_t i = 0; i < radial_count; ++i) {
+            const auto r = a * static_cast<double>(i) /
+                           static_cast<double>(radial_count - 1);
+            std::size_t offset = 0;
+            for (std::size_t j = 0; j < ns.size(); ++j) {
+                auto [m_lower, m_upper] = m_ranges[i][j];
+                for (int k = 0; k <= m_upper - m_lower; ++k) {
+                    const int kp = std::floor(
+                        std::abs(.5 + std::floor(2 * (ns[j] * ITPA_EQ.q(r) -
+                                                      (k + m_lower)))));
+                    lines[std::make_pair(ns[j], kp)].push_back(
+                        {r, continuum[i][k + offset]});
+                }
+                offset += m_upper - m_lower + 1;
+            }
         }
     }
     // output
