@@ -18,34 +18,57 @@ struct hash<pair<int, int>> {
 };
 };  // namespace std
 
-int main() {
+int main(int argc, char** argv) {
     using namespace std::complex_literals;
 
-    constexpr double a = 0.1;
-    const auto q = [](double r) { return 1.71 + 0.16 * r * r / (a * a); };
-    const auto dp = [](double r) { return 0.; };  // ad hoc expression
+    // constexpr double a = 0.1;
+    // const auto q = [](double r) { return 1.71 + 0.16 * r * r / (a * a); };
+    // const auto dp = [](double r) { return 0.; };  // ad hoc expression
 
-    const auto q_min = q(0.);
+    // const AnalyticEquilibrium equilibrium(q, dp);
 
-    const AnalyticEquilibrium ITPA_EQ(q, dp);
+    if (argc < 2) { return EPERM; }
+    std::string gfile_path = argv[1];
 
-    constexpr std::size_t radial_count = 138;
-    constexpr std::size_t omega_count = 300;
-    // this value is normalized to $v_{A,0}/(q_min*R_0)$, somewhere between 2nd
-    // and 3rd gap for all r, in ITPA case
+    std::ifstream gfile(gfile_path);
+    if (!gfile.is_open()) {
+        std::cerr << "Can not open g-file.\n";
+        return ENOENT;
+    }
+    GFileRawData gfile_data;
+    gfile >> gfile_data;
+    if (!gfile_data.is_complete()) {
+        std::cerr << "Can not parse g-file.\n";
+        return 0;
+    }
+    gfile.close();
+
+    const std::size_t radial_count = 138;
+    const std::size_t omega_count = 300;
+    // this value is normalized to $v_{A,0}/(q_min*R_0)$, making $\omega$
+    // to reach least somewhere between 2nd and 3rd gap for all radial
+    // position.
     constexpr double max_omega = 1.2;
 
+    const NumericEquilibrium<double> equilibrium(gfile_data, radial_count, 300);
+    const auto r_max = equilibrium.psi_at_wall();
+    const auto delta_r = r_max / radial_count;
+
+    double q_min = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < radial_count; ++i) {
+        q_min = std::min(q_min, equilibrium.safety_factor((i + i) * delta_r));
+    }
+
     // toroidal mode numbers
-    std::vector<int> ns{3, 5, 6, 8, 11, 13};
+    std::vector<int> ns{8};
     // poloidal mode numbers
     std::vector<std::vector<std::pair<int, int>>> m_ranges(radial_count);
     std::vector<std::vector<double>> continuum(radial_count);
 
     for (std::size_t i = 0; i < radial_count; ++i) {
         // TODO: Need some refinement around stability boundary
-        const auto r =
-            a * static_cast<double>(i) / static_cast<double>(radial_count - 1);
-        const auto local_q = ITPA_EQ.q(r);
+        const auto r = delta_r * static_cast<double>(i + 1);
+        const auto local_q = equilibrium.safety_factor(r);
 
         std::vector<std::complex<double>> local_nu;
         local_nu.reserve(omega_count);
@@ -55,7 +78,7 @@ int main() {
         for (std::size_t j = 0; j < omega_count; ++j) {
             // convert between global and local normalization of $\omega$
             auto omega2 = std::pow(domega * static_cast<double>(j), 2);
-            auto potential = [omega2, r, &eq = ITPA_EQ](double theta) {
+            auto potential = [omega2, r, &eq = equilibrium](double theta) {
                 return eq.radial_func(r, theta) + omega2 * eq.j_func(r, theta);
             };
             const FloquetMatrix flo_mat(
@@ -109,7 +132,7 @@ int main() {
                     local_nu.begin(), local_nu.end(), std::abs(kp),
                     [](auto nu_c, auto k) { return std::real(nu_c) < k; });
                 if (kp > 0. && 2 * kp - std::round(2 * kp) < 1.e-7) {
-                    // accumulation point
+                    // accumulation point, nq-m>0 branch
                     it = std::upper_bound(
                         local_nu.begin(), local_nu.end(), std::abs(kp),
                         [](auto k, auto nu_c) { return k < std::real(nu_c); });
@@ -139,7 +162,7 @@ int main() {
                 auto [m_lower, m_upper] = m_ranges[i][j];
                 for (int k = 0; k <= m_upper - m_lower; ++k) {
                     lines[std::make_pair(ns[j], k + m_lower)].push_back(
-                        {a * static_cast<double>(i) /
+                        {r_max * static_cast<double>(i) /
                              static_cast<double>(radial_count),
                          continuum[i][k + offset]});
                 }
@@ -149,15 +172,18 @@ int main() {
     } else {
         // sort by Floquet exponent
         for (std::size_t i = 0; i < radial_count; ++i) {
-            const auto r = a * static_cast<double>(i) /
-                           static_cast<double>(radial_count - 1);
+            // Pay attention to radial coordinate, it should be the same as that
+            // used above
+            // TODO: Ensure they are the same
+            const auto r = delta_r * static_cast<double>(i + 1);
             std::size_t offset = 0;
             for (std::size_t j = 0; j < ns.size(); ++j) {
                 auto [m_lower, m_upper] = m_ranges[i][j];
                 for (int k = 0; k <= m_upper - m_lower; ++k) {
-                    const int kp = std::floor(
-                        std::abs(.5 + std::floor(2 * (ns[j] * ITPA_EQ.q(r) -
-                                                      (k + m_lower)))));
+                    const int kp = std::floor(std::abs(
+                        .5 +
+                        std::floor(2 * (ns[j] * equilibrium.safety_factor(r) -
+                                        (k + m_lower)))));
                     lines[std::make_pair(ns[j], kp)].push_back(
                         {r, continuum[i][k + offset]});
                 }

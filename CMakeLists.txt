@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.15)
 project(
-    FACS 
-    VERSION 0.1
+    FACS
+    VERSION 0.2
     HOMEPAGE_URL "https://github.com/12ff54e/FACS.git"
     LANGUAGES CXX)
 
@@ -38,5 +38,5 @@ else()
     endif()
 endif()
 
-add_executable(facs src/main.cpp)
+add_executable(facs src/main.cpp src/gFileRawData.cpp)
 target_include_directories(facs PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
