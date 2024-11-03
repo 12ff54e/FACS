@@ -38,5 +38,7 @@ else()
     endif()
 endif()
 
+add_compile_definitions(INTP_CELL_LAYOUT)
+
 add_executable(facs src/main.cpp src/gFileRawData.cpp)
 target_include_directories(facs PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)

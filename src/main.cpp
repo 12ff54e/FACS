@@ -1,5 +1,6 @@
 #include <algorithm>  // lower_bound, upper_bound
 #include <cmath>      // ceil, floor
+#include <filesystem>
 #include <iostream>
 #include <numbers>  // pi
 #include <unordered_map>
@@ -7,6 +8,9 @@
 #include "Floquet.h"
 #include "equilibrium.h"
 #include "integrator.h"
+
+#define ZQ_TIMER_IMPLEMENTATION
+#include "timer.h"
 
 // inject hash function for pair of int
 namespace std {
@@ -29,6 +33,9 @@ int main(int argc, char** argv) {
 
     if (argc < 2) { return EPERM; }
     std::string gfile_path = argv[1];
+
+    auto& timer = Timer::get_timer();
+    timer.start("Read gfile");
 
     std::ifstream gfile(gfile_path);
     if (!gfile.is_open()) {
@@ -66,6 +73,8 @@ int main(int argc, char** argv) {
     std::vector<std::vector<double>> continuum(radial_count);
 
     for (std::size_t i = 0; i < radial_count; ++i) {
+        timer.pause_last_and_start_next("Calculate Floquet exponent");
+
         // TODO: Need some refinement around stability boundary
         const auto r = delta_r * static_cast<double>(i + 1);
         const auto local_q = equilibrium.safety_factor(r);
@@ -115,6 +124,8 @@ int main(int argc, char** argv) {
                              (order % 2 == 0 ? last_real : .5 - last_real));
         }
 
+        timer.pause_last_and_start_next("Solve for omega");
+
         // calculate omega for each pair of mode numbers (n, m)
         // change normalization of domega to v_{A,0}/R_0 here
         const auto domega_global = domega / local_q;
@@ -149,6 +160,8 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    timer.pause_last_and_start_next("Sort points into lines");
 
     // sort by (n,m) or (n, \nu) to individual lines
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
@@ -191,13 +204,30 @@ int main(int argc, char** argv) {
             }
         }
     }
+
+    timer.pause_last_and_start_next("Output");
+
     // output
+    auto output_file_name =
+        std::string{"continuum-"} +
+        std::filesystem::path(gfile_path).filename().string();
+    std::ofstream output(output_file_name);
+    if (!output.is_open()) {
+        std::cerr << "Failed to open " << std::quoted(output_file_name)
+                  << " for write.";
+        return ENOENT;
+    }
     for (auto& line : lines) {
         const auto& [nm, coords] = line;
-        std::cout << nm.first << ' ' << nm.second << ' ';
-        for (auto pt : coords) { std::cout << pt[0] << ' ' << pt[1] << ' '; }
-        std::cout << '\n';
+        output << nm.first << ' ' << nm.second << ' ';
+        for (auto pt : coords) { output << pt[0] << ' ' << pt[1] << ' '; }
+        output << '\n';
     }
+
+    output.close();
+
+    timer.pause();
+    timer.print();
 
     return 0;
 }
