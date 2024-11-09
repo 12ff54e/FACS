@@ -50,8 +50,8 @@ int main(int argc, char** argv) {
     }
     gfile.close();
 
-    const std::size_t radial_count = 138;
-    const std::size_t omega_count = 300;
+    const std::size_t radial_count = 384;
+    const std::size_t omega_count = 250;
     // this value is normalized to $v_{A,0}/(q_min*R_0)$, making $\omega$
     // to reach least somewhere between 2nd and 3rd gap for all radial
     // position.
@@ -61,9 +61,15 @@ int main(int argc, char** argv) {
     const auto r_max = equilibrium.psi_at_wall();
     const auto delta_r = r_max / radial_count;
 
+    auto get_psi = [&](std::size_t idx) {
+        static const double delta =
+            equilibrium.psi_at_wall() / (radial_count * radial_count);
+        return idx * idx * delta;
+    };
+
     double q_min = std::numeric_limits<double>::infinity();
     for (std::size_t i = 0; i < radial_count; ++i) {
-        q_min = std::min(q_min, equilibrium.safety_factor((i + i) * delta_r));
+        q_min = std::min(q_min, equilibrium.safety_factor(get_psi(i + 1)));
     }
 
     // toroidal mode numbers
@@ -76,7 +82,7 @@ int main(int argc, char** argv) {
         timer.pause_last_and_start_next("Calculate Floquet exponent");
 
         // TODO: Need some refinement around stability boundary
-        const auto r = delta_r * static_cast<double>(i + 1);
+        const auto r = get_psi(i + 1);
         const auto local_q = equilibrium.safety_factor(r);
 
         std::vector<std::complex<double>> local_nu;
@@ -188,17 +194,18 @@ int main(int argc, char** argv) {
             // Pay attention to radial coordinate, it should be the same as that
             // used above
             // TODO: Ensure they are the same
-            const auto r = delta_r * static_cast<double>(i + 1);
+            const auto psi = get_psi(i + 1);
             std::size_t offset = 0;
             for (std::size_t j = 0; j < ns.size(); ++j) {
                 auto [m_lower, m_upper] = m_ranges[i][j];
                 for (int k = 0; k <= m_upper - m_lower; ++k) {
                     const int kp = std::floor(std::abs(
                         .5 +
-                        std::floor(2 * (ns[j] * equilibrium.safety_factor(r) -
+                        std::floor(2 * (ns[j] * equilibrium.safety_factor(psi) -
                                         (k + m_lower)))));
                     lines[std::make_pair(ns[j], kp)].push_back(
-                        {r, continuum[i][k + offset]});
+                        {equilibrium.minor_radius(psi),
+                         continuum[i][k + offset]});
                 }
                 offset += m_upper - m_lower + 1;
             }

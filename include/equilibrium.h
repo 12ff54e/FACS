@@ -62,6 +62,17 @@ struct NumericEquilibrium {
         return spdata_.intp_data().psi_sample_for_output.back();
     }
 
+    // defined as \sqrt{\psi_t/\psi_{t,\mathrm{wall}}}
+    auto minor_radius(value_type psi) const {
+        const auto& psi_t = spdata_.intp_data().intp_1d[5];
+        const auto psi_min = spdata_.intp_data().psi_sample_for_output.front();
+        if (psi < psi_min) {
+            return std::sqrt(psi / psi_min * psi_t(psi_min) /
+                             psi_t(psi_at_wall()));
+        }
+        return std::sqrt(psi_t(psi) / psi_t(psi_at_wall()));
+    }
+
    private:
     Spdata<value_type> spdata_;
 };
