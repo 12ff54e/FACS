@@ -2,7 +2,9 @@
 #include <cmath>      // ceil, floor
 #include <filesystem>
 #include <iostream>
+#include <map>
 #include <numbers>  // pi
+#include <stack>
 #include <unordered_map>
 
 #include "Floquet.h"
@@ -52,9 +54,7 @@ int main(int argc, char** argv) {
 
     const std::size_t radial_count = 384;
     const std::size_t omega_count = 250;
-    // this value is normalized to $v_{A,0}/(q_min*R_0)$, making $\omega$
-    // to reach least somewhere between 2nd and 3rd gap for all radial
-    // position.
+    // this value is normalized to $v_{A,0}/(q_min*R_0)$
     constexpr double max_omega = 1.2;
 
     const NumericEquilibrium<double> equilibrium(gfile_data, radial_count, 300);
@@ -81,19 +81,15 @@ int main(int argc, char** argv) {
     for (std::size_t i = 0; i < radial_count; ++i) {
         timer.pause_last_and_start_next("Calculate Floquet exponent");
 
-        // TODO: Need some refinement around stability boundary
         const auto r = get_psi(i + 1);
         const auto local_q = equilibrium.safety_factor(r);
 
-        std::vector<std::complex<double>> local_nu;
-        local_nu.reserve(omega_count);
-
-        const auto domega =
-            local_q / q_min * max_omega / static_cast<double>(omega_count - 1);
-        for (std::size_t j = 0; j < omega_count; ++j) {
+        const auto max_local_omega = local_q / q_min * max_omega;
+        auto calc_floquet_exp = [r, &equilibrium](auto omega) {
             // convert between global and local normalization of $\omega$
-            auto omega2 = std::pow(domega * static_cast<double>(j), 2);
-            auto potential = [omega2, r, &eq = equilibrium](double theta) {
+            const auto omega2 = omega * omega;
+            const auto potential = [omega2, r,
+                                    &eq = equilibrium](double theta) {
                 return eq.radial_func(r, theta) + omega2 * eq.j_func(r, theta);
             };
             const FloquetMatrix flo_mat(
@@ -101,67 +97,109 @@ int main(int argc, char** argv) {
                 static_cast<std::size_t>(100 * std::sqrt(omega2) * 2) + 100);
             // FloquetMatrix::eigenvalue always returns eigenvalue with
             // imaginary part not less than 0
-            local_nu.push_back(std::log(flo_mat.eigenvalue()) /
-                               (2.i * std::numbers::pi));
+            return std::log(flo_mat.eigenvalue()) / (2.i * std::numbers::pi);
+        };
+        std::map<double, std::complex<double>> omega_nu_map;
+        std::stack<std::pair<decltype(omega_nu_map)::iterator,
+                             decltype(omega_nu_map)::iterator>>
+            region_stack;
+
+        // critiria for stoping subdivision
+        constexpr double subdivision_err = 1.e-3;
+
+        for (int region = 0; region < std::ceil(max_local_omega * 4);
+             ++region) {
+            const auto omega_min = .25 * region;
+            const auto omega_max = .25 * (region + 1) > max_local_omega
+                                       ? max_local_omega
+                                       : .25 * (region + 1);
+            region_stack.push(
+                {omega_nu_map.emplace(omega_min, calc_floquet_exp(omega_min))
+                     .first,
+                 omega_nu_map.emplace(omega_max, calc_floquet_exp(omega_max))
+                     .first});
+
+            while (!region_stack.empty()) {
+                const auto omega_range = region_stack.top();
+                region_stack.pop();
+                const auto omega_mid =
+                    .5 * (omega_range.first->first + omega_range.second->first);
+                const auto nu_mid = .5 * (omega_range.first->second +
+                                          omega_range.second->second);
+                const auto nu_actual = calc_floquet_exp(omega_mid);
+                if (std::abs(nu_mid - nu_actual) > subdivision_err) {
+                    auto it = omega_nu_map.emplace_hint(omega_range.second,
+                                                        omega_mid, nu_actual);
+                    region_stack.push({it, omega_range.second});
+                    region_stack.push({omega_range.first, it});
+                }
+            }
         }
+        std::vector<decltype(omega_nu_map)::value_type> local_omega_nu(
+            omega_nu_map.begin(), omega_nu_map.end());
+        std::cout << i << ", " << local_omega_nu.size() << '\n';
 
         // adjust $\Re\nu$ according to stability region
         std::size_t order = 0;
         bool increasing = true;
-        double last_real = local_nu[0].real();
-        for (std::size_t j = 1; j < omega_count; ++j) {
+        double last_real = local_omega_nu[0].second.real();
+        for (auto& [_, nu] : local_omega_nu) {
             // normally $\Re\nu$ growth monotonic with $\omega$, but it goes
             // unchanged inside coutinuum gap, a small margin is added to
             // avoid misclassifying gap region as another stability
             // region
-            if (increasing && local_nu[j].real() - last_real + 1.e-6 < 0.) {
+            if (increasing && nu.real() - last_real + 1.e-6 < 0.) {
                 // entering a region where wrong branch of $\nu$ is picked
                 increasing = false;
                 ++order;
-            } else if (!increasing &&
-                       local_nu[j].real() - last_real - 1.e-6 > 0.) {
+            } else if (!increasing && nu.real() - last_real - 1.e-6 > 0.) {
                 // entering a region where wrong branch of $\nu$ is picked
                 increasing = true;
                 ++order;
             }
 
-            last_real = local_nu[j].real();
-            local_nu[j].real(.5 * static_cast<double>(order) +
-                             (order % 2 == 0 ? last_real : .5 - last_real));
+            last_real = nu.real();
+            nu.real(.5 * static_cast<double>(order) +
+                    (order % 2 == 0 ? last_real : .5 - last_real));
         }
 
         timer.pause_last_and_start_next("Solve for omega");
 
         // calculate omega for each pair of mode numbers (n, m)
-        // change normalization of domega to v_{A,0}/R_0 here
-        const auto domega_global = domega / local_q;
+        // change normalization of omega to v_{A,0}/R_0 here
+        const auto local_max_nu = local_omega_nu.back().second.real();
         for (std::size_t n_idx = 0; n_idx < ns.size(); ++n_idx) {
             auto n = ns[n_idx];
             std::size_t m_num = 0;
-            const int m_lower = std::ceil(n * local_q - local_nu.back().real());
-            const int m_upper =
-                std::floor(n * local_q + local_nu.back().real());
+            const int m_lower = std::ceil(n * local_q - local_max_nu);
+            const int m_upper = std::floor(n * local_q + local_max_nu);
             m_ranges[i].emplace_back(m_lower, m_upper);
 
             for (int m = m_lower; m <= m_upper; ++m) {
                 const double kp = n * local_q - m;
                 auto it = std::lower_bound(
-                    local_nu.begin(), local_nu.end(), std::abs(kp),
-                    [](auto nu_c, auto k) { return std::real(nu_c) < k; });
+                    local_omega_nu.begin(), local_omega_nu.end(), std::abs(kp),
+                    [](const auto& omega_nu, auto k) {
+                        return omega_nu.second.real() < k;
+                    });
                 if (kp > 0. && 2 * kp - std::round(2 * kp) < 1.e-7) {
                     // accumulation point, nq-m>0 branch
-                    it = std::upper_bound(
-                        local_nu.begin(), local_nu.end(), std::abs(kp),
-                        [](auto k, auto nu_c) { return k < std::real(nu_c); });
+                    it = std::upper_bound(local_omega_nu.begin(),
+                                          local_omega_nu.end(), std::abs(kp),
+                                          [](auto k, const auto& omega_nu) {
+                                              return k < omega_nu.second.real();
+                                          });
                 }
-                if (it == local_nu.begin()) {
+                if (it == local_omega_nu.begin()) {
                     continuum[i].push_back(0.);
-                } else if (it != local_nu.end()) {
+                } else if (it != local_omega_nu.end()) {
+                    const auto [omega0, nu0] = *(it - 1);
+                    const auto [omega1, nu1] = *it;
                     continuum[i].push_back(
-                        (it - local_nu.begin() +
-                         (std::abs(kp) - (it - 1)->real()) /
-                             (it->real() - (it - 1)->real())) *
-                        domega_global);
+                        (omega0 + (std::abs(kp) - nu0.real()) /
+                                      (nu1.real() - nu0.real()) *
+                                      (omega1 - omega0)) /
+                        local_q);
                 }
             }
         }
