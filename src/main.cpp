@@ -27,6 +27,8 @@ struct hash<pair<int, int>> {
 // Zero criteria for float point numbers
 constexpr double EPSILON = 1.e-6;
 
+// TODO: Add command line input logic
+// TODO: Adaptively choose radial location based on nq'
 int main(int argc, char** argv) {
     using namespace std::complex_literals;
 
@@ -87,9 +89,9 @@ int main(int argc, char** argv) {
         const auto r = get_psi(i + 1);
         const auto local_q = equilibrium.safety_factor(r);
 
+        // convert between global and local normalization of $\omega$
         const auto max_local_omega = local_q / q_min * max_omega;
         auto calc_floquet_exp = [r, &equilibrium](auto omega) {
-            // convert between global and local normalization of $\omega$
             const auto omega2 = omega * omega;
             const auto potential = [omega2, r,
                                     &eq = equilibrium](double theta) {
@@ -145,6 +147,9 @@ int main(int argc, char** argv) {
                 }
             }
         }
+
+        timer.pause_last_and_start_next("Solve for omega");
+
         std::vector<decltype(omega_nu_map)::value_type> local_omega_nu(
             omega_nu_map.begin(), omega_nu_map.end());
         std::cout << i << ", " << local_omega_nu.size() << '\n';
@@ -176,8 +181,6 @@ int main(int argc, char** argv) {
                     (order % 2 == 0 ? last_real : .5 - last_real));
         }
 
-        timer.pause_last_and_start_next("Solve for omega");
-
         // calculate omega for each pair of mode numbers (n, m)
         // change normalization of omega to v_{A,0}/R_0 here
         const auto local_max_nu = local_omega_nu.back().second.real();
@@ -197,7 +200,7 @@ int main(int argc, char** argv) {
                     });
                 if (kp > 0. &&
                     std::abs(2 * kp - std::round(2 * kp)) < EPSILON) {
-                    // accumulation point, nq-m>0 branch
+                    // accumulation point, belongs to nq-m>0 branch
                     it = std::upper_bound(local_omega_nu.begin(),
                                           local_omega_nu.end(), std::abs(kp),
                                           [](auto k, const auto& omega_nu) {
