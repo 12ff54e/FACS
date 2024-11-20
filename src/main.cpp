@@ -24,6 +24,9 @@ struct hash<pair<int, int>> {
 };
 };  // namespace std
 
+// Zero criteria for float point numbers
+constexpr double EPSILON = 1.e-6;
+
 int main(int argc, char** argv) {
     using namespace std::complex_literals;
 
@@ -52,7 +55,7 @@ int main(int argc, char** argv) {
     }
     gfile.close();
 
-    const std::size_t radial_count = 384;
+    const std::size_t radial_count = 1000;
     const std::size_t omega_count = 250;
     // this value is normalized to $v_{A,0}/(q_min*R_0)$
     constexpr double max_omega = 1.2;
@@ -106,13 +109,15 @@ int main(int argc, char** argv) {
 
         // critiria for stoping subdivision
         constexpr double subdivision_err = 1.e-3;
+        constexpr std::size_t initial_subdivision = 2;
 
-        for (int region = 0; region < std::ceil(max_local_omega * 4);
+        for (int region = 0; region < max_local_omega * initial_subdivision;
              ++region) {
-            const auto omega_min = .25 * region;
-            const auto omega_max = .25 * (region + 1) > max_local_omega
-                                       ? max_local_omega
-                                       : .25 * (region + 1);
+            const auto omega_min = 1. / initial_subdivision * region;
+            const auto omega_max =
+                1. / initial_subdivision * (region + 1) > max_local_omega
+                    ? max_local_omega
+                    : 1. / initial_subdivision * (region + 1);
             region_stack.push(
                 {omega_nu_map.emplace(omega_min, calc_floquet_exp(omega_min))
                      .first,
@@ -120,18 +125,23 @@ int main(int argc, char** argv) {
                      .first});
 
             while (!region_stack.empty()) {
-                const auto omega_range = region_stack.top();
+                const auto [pt0, pt1] = region_stack.top();
                 region_stack.pop();
-                const auto omega_mid =
-                    .5 * (omega_range.first->first + omega_range.second->first);
-                const auto nu_mid = .5 * (omega_range.first->second +
-                                          omega_range.second->second);
+                const auto omega_mid = .5 * (pt0->first + pt1->first);
+                const auto nu_0 = pt0->second.real();
+                const auto nu_1 = pt1->second.real();
                 const auto nu_actual = calc_floquet_exp(omega_mid);
-                if (std::abs(nu_mid - nu_actual) > subdivision_err) {
-                    auto it = omega_nu_map.emplace_hint(omega_range.second,
-                                                        omega_mid, nu_actual);
-                    region_stack.push({it, omega_range.second});
-                    region_stack.push({omega_range.first, it});
+                auto it = omega_nu_map.emplace_hint(pt1, omega_mid, nu_actual);
+                constexpr double min_domega = 1.e-3;
+                // NOTE: I don not about imaginary part of \nu, so points in gap
+                // zone will be sparse. Extra subdivisions are done at
+                // gap-continuum boundary.
+                if ((std::abs(.5 * (nu_0 + nu_1) - nu_actual.real()) >
+                         subdivision_err ||
+                     (nu_0 < EPSILON) != (nu_1 < EPSILON)) &&
+                    pt1->first - omega_mid > min_domega) {
+                    region_stack.push({it, pt1});
+                    region_stack.push({pt0, it});
                 }
             }
         }
@@ -148,12 +158,15 @@ int main(int argc, char** argv) {
             // unchanged inside coutinuum gap, a small margin is added to
             // avoid misclassifying gap region as another stability
             // region
-            if (increasing && nu.real() - last_real + 1.e-6 < 0.) {
-                // entering a region where wrong branch of $\nu$ is picked
+            // TODO: Fix these two ad-hoc check: last_real > .4, < .1
+            if (increasing && nu.real() - last_real + EPSILON < 0. &&
+                last_real > .4) {
+                // e^{i\nu T} entering lower half plane
                 increasing = false;
                 ++order;
-            } else if (!increasing && nu.real() - last_real - 1.e-6 > 0.) {
-                // entering a region where wrong branch of $\nu$ is picked
+            } else if (!increasing && nu.real() - last_real - EPSILON > 0. &&
+                       last_real < .1) {
+                // e^{i\nu T} entering upper half plane
                 increasing = true;
                 ++order;
             }
@@ -182,7 +195,8 @@ int main(int argc, char** argv) {
                     [](const auto& omega_nu, auto k) {
                         return omega_nu.second.real() < k;
                     });
-                if (kp > 0. && 2 * kp - std::round(2 * kp) < 1.e-7) {
+                if (kp > 0. &&
+                    std::abs(2 * kp - std::round(2 * kp)) < EPSILON) {
                     // accumulation point, nq-m>0 branch
                     it = std::upper_bound(local_omega_nu.begin(),
                                           local_omega_nu.end(), std::abs(kp),
