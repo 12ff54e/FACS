@@ -352,15 +352,37 @@ class Spdata {
                     coef / (b * b) * magnetic_field_unit / length_unit;
                 gp_rt_boozer_grid.push_back(gp_rt({r_grid, z_grid}, psi));
             }
-            intp::InterpolationFunction1D<ORDER_, value_type, coord_type>
-                gp_rt_intp(intp::util::get_range(gp_rt_boozer_grid), true);
-            for (std::size_t i = 0; i <= lst_; ++i) {
-                radial_func_boozer(ri, i) =
-                    gp_rt_intp.derivative(
-                        {(static_cast<value_type>(i % lst_) + .5) *
-                         theta_delta_},
-                        {2}) /
-                    gp_rt_boozer_grid[i];
+            // Resample on a sparser grid to avoid a noisy 2nd order derivative.
+            // Smooth before interpolation might also help, e.g. convolution
+            // with a Gauss kernel.
+            {
+                intp::InterpolationFunction1D<ORDER_, value_type, coord_type>
+                    gp_rt_intp(std::make_pair(.5 * theta_delta_,
+                                              2 * M_PI + .5 * theta_delta_),
+                               intp::util::get_range(gp_rt_boozer_grid), true);
+                constexpr std::size_t gp_rt_lst = 50;
+                constexpr double gp_rt_theta_delta = 2 * M_PI / gp_rt_lst;
+                std::vector<value_type> gp_rt_boozer_grid_sparse;
+                gp_rt_boozer_grid_sparse.reserve(gp_rt_lst + 1);
+                for (std::size_t i = 0; i <= gp_rt_lst; ++i) {
+                    gp_rt_boozer_grid_sparse.push_back(gp_rt_intp(
+                        (static_cast<value_type>(i % gp_rt_lst) + .5) *
+                        gp_rt_theta_delta));
+                }
+
+                intp::InterpolationFunction1D<ORDER_, value_type, coord_type>
+                    gp_rt_sparse_intp(
+                        std::make_pair(.5 * gp_rt_theta_delta,
+                                       2 * M_PI + .5 * gp_rt_theta_delta),
+                        intp::util::get_range(gp_rt_boozer_grid_sparse), true);
+                for (std::size_t i = 0; i <= lst_; ++i) {
+                    radial_func_boozer(ri, i) =
+                        gp_rt_sparse_intp.derivative(
+                            {(static_cast<value_type>(i % lst_) + .5) *
+                             theta_delta_},
+                            {2}) /
+                        gp_rt_boozer_grid[i];
+                }
             }
 
             safety_factor.push_back(safety_factor_intp(psi));

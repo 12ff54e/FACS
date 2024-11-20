@@ -45,7 +45,7 @@ struct NumericEquilibrium {
         : spdata_(gfile_raw_data, radial_grid_num, poloidal_grid_num) {}
 
     auto radial_func(value_type r, value_type theta) const {
-        return spdata_.intp_data().intp_2d[4](r, theta);
+        return -spdata_.intp_data().intp_2d[4](r, theta);
     }
 
     auto j_func(value_type r, value_type theta) const {
