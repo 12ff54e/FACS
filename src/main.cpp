@@ -58,11 +58,14 @@ int main(int argc, char** argv) {
     gfile.close();
 
     const std::size_t radial_count = 1000;
+    const std::size_t poloidal_sample_point = 300;
     const std::size_t omega_count = 250;
+    const double psi_ratio = .96;
     // this value is normalized to $v_{A,0}/(q_min*R_0)$
     constexpr double max_omega = 1.2;
 
-    const NumericEquilibrium<double> equilibrium(gfile_data, radial_count, 300);
+    const NumericEquilibrium<double> equilibrium(
+        gfile_data, radial_count, poloidal_sample_point, psi_ratio);
     const auto r_max = equilibrium.psi_at_wall();
     const auto delta_r = r_max / radial_count;
 
@@ -78,7 +81,7 @@ int main(int argc, char** argv) {
     }
 
     // toroidal mode numbers
-    std::vector<int> ns{8};
+    std::vector<int> ns{5};
     // poloidal mode numbers
     std::vector<std::vector<std::pair<int, int>>> m_ranges(radial_count);
     std::vector<std::vector<double>> continuum(radial_count);
@@ -133,14 +136,16 @@ int main(int argc, char** argv) {
                 const auto nu_0 = pt0->second.real();
                 const auto nu_1 = pt1->second.real();
                 const auto nu_actual = calc_floquet_exp(omega_mid);
-                auto it = omega_nu_map.emplace_hint(pt1, omega_mid, nu_actual);
+                const auto it =
+                    omega_nu_map.emplace_hint(pt1, omega_mid, nu_actual);
                 constexpr double min_domega = 1.e-3;
                 // NOTE: I don not about imaginary part of \nu, so points in gap
                 // zone will be sparse. Extra subdivisions are done at
                 // gap-continuum boundary.
                 if ((std::abs(.5 * (nu_0 + nu_1) - nu_actual.real()) >
                          subdivision_err ||
-                     (nu_0 < EPSILON) != (nu_1 < EPSILON)) &&
+                     (nu_0 < EPSILON != nu_1 < EPSILON) ||
+                     (.5 - nu_0 < EPSILON != .5 - nu_1 < EPSILON)) &&
                     pt1->first - omega_mid > min_domega) {
                     region_stack.push({it, pt1});
                     region_stack.push({pt0, it});

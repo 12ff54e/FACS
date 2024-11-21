@@ -36,36 +36,44 @@ struct AnalyticEquilibrium {
 };
 
 template <typename T>
-struct NumericEquilibrium {
+struct NumericEquilibrium : private Spdata<T> {
     using value_type = T;
 
-    NumericEquilibrium(GFileRawData& gfile_raw_data,
+    using Spdata<value_type>::intp_data;
+
+    NumericEquilibrium(const GFileRawData& g_file_data,
                        std::size_t radial_grid_num,
-                       std::size_t poloidal_grid_num)
-        : spdata_(gfile_raw_data, radial_grid_num, poloidal_grid_num) {}
+                       std::size_t poloidal_grid_num,
+                       value_type psi_ratio = .98)
+        : Spdata<value_type>(g_file_data,
+                             radial_grid_num,
+                             poloidal_grid_num,
+                             false,
+                             radial_grid_num < 256 ? radial_grid_num : 256,
+                             psi_ratio) {}
+    // No need to construct too many magnetic surfaces, 256 should be more than
+    // necessary
 
     auto radial_func(value_type r, value_type theta) const {
-        return -spdata_.intp_data().intp_2d[4](r, theta);
+        return -intp_data().intp_2d[4](r, theta);
     }
 
     auto j_func(value_type r, value_type theta) const {
-        const auto j = spdata_.intp_data().intp_2d[3](r, theta);
-        const auto q = spdata_.intp_data().intp_1d[0](r);
+        const auto j = intp_data().intp_2d[3](r, theta);
+        const auto q = intp_data().intp_1d[0](r);
         return std::pow(j / q, 2);
     }
 
-    auto safety_factor(value_type r) const {
-        return spdata_.intp_data().intp_1d[0](r);
-    }
+    auto safety_factor(value_type r) const { return intp_data().intp_1d[0](r); }
 
     auto psi_at_wall() const noexcept {
-        return spdata_.intp_data().psi_sample_for_output.back();
+        return intp_data().psi_sample_for_output.back();
     }
 
     // defined as \sqrt{\psi_t/\psi_{t,\mathrm{wall}}}
     auto minor_radius(value_type psi) const {
-        const auto& psi_t = spdata_.intp_data().intp_1d[5];
-        const auto psi_min = spdata_.intp_data().psi_sample_for_output.front();
+        const auto& psi_t = intp_data().intp_1d[5];
+        const auto psi_min = intp_data().psi_sample_for_output.front();
         if (psi < psi_min) {
             return std::sqrt(psi / psi_min * psi_t(psi_min) /
                              psi_t(psi_at_wall()));
