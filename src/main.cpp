@@ -32,12 +32,6 @@ constexpr double EPSILON = 1.e-6;
 int main(int argc, char** argv) {
     using namespace std::complex_literals;
 
-    // constexpr double a = 0.1;
-    // const auto q = [](double r) { return 1.71 + 0.16 * r * r / (a * a); };
-    // const auto dp = [](double r) { return 0.; };  // ad hoc expression
-
-    // const AnalyticEquilibrium equilibrium(q, dp);
-
     if (argc < 2) { return EPERM; }
     std::string gfile_path = argv[1];
 

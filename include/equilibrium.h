@@ -80,9 +80,6 @@ struct NumericEquilibrium : private Spdata<T> {
         }
         return std::sqrt(psi_t(psi) / psi_t(psi_at_wall()));
     }
-
-   private:
-    Spdata<value_type> spdata_;
 };
 
 #endif  // EQUILIBRIUM_H
