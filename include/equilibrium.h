@@ -54,31 +54,37 @@ struct NumericEquilibrium : private Spdata<T> {
     // No need to construct too many magnetic surfaces, 256 should be more than
     // necessary
 
-    auto radial_func(value_type r, value_type theta) const {
-        return -intp_data().intp_2d[4](r, theta);
+    auto radial_func(value_type psi, value_type theta) const {
+        return -intp_data().intp_2d[4](psi, theta);
     }
 
-    auto j_func(value_type r, value_type theta) const {
-        const auto j = intp_data().intp_2d[3](r, theta);
-        const auto q = intp_data().intp_1d[0](r);
+    auto j_func(value_type psi, value_type theta) const {
+        const auto j = intp_data().intp_2d[3](psi, theta);
+        const auto q = intp_data().intp_1d[0](psi);
         return std::pow(j / q, 2);
     }
 
-    auto safety_factor(value_type r) const { return intp_data().intp_1d[0](r); }
+    auto safety_factor(value_type psi) const {
+        return intp_data().intp_1d[0](psi);
+    }
 
-    auto psi_at_wall() const noexcept {
-        return intp_data().psi_sample_for_output.back();
+    auto dq_dpsi(value_type psi) const {
+        return intp_data().intp_1d[0].derivative({psi}, {1});
     }
 
     // defined as \sqrt{\psi_t/\psi_{t,\mathrm{wall}}}
     auto minor_radius(value_type psi) const {
         const auto& psi_t = intp_data().intp_1d[5];
-        const auto psi_min = intp_data().psi_sample_for_output.front();
+        const auto [psi_min, psi_max] = psi_range();
         if (psi < psi_min) {
-            return std::sqrt(psi / psi_min * psi_t(psi_min) /
-                             psi_t(psi_at_wall()));
+            return std::sqrt(psi / psi_min * psi_t(psi_min) / psi_t(psi_max));
         }
-        return std::sqrt(psi_t(psi) / psi_t(psi_at_wall()));
+        return std::sqrt(psi_t(psi) / psi_t(psi_max));
+    }
+
+    auto psi_range() const {
+        return std::make_pair(intp_data().psi_sample_for_output.front(),
+                              intp_data().psi_sample_for_output.back());
     }
 };
 

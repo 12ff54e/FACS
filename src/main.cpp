@@ -1,4 +1,4 @@
-#include <algorithm>  // lower_bound, upper_bound
+#include <algorithm>  // lower_bound, upper_bound, max_element
 #include <cmath>      // ceil, floor
 #include <filesystem>
 #include <iostream>
@@ -28,7 +28,6 @@ struct hash<pair<int, int>> {
 constexpr double EPSILON = 1.e-6;
 
 // TODO: Add command line input logic
-// TODO: Adaptively choose radial location based on nq'
 int main(int argc, char** argv) {
     using namespace std::complex_literals;
 
@@ -60,39 +59,92 @@ int main(int argc, char** argv) {
 
     const NumericEquilibrium<double> equilibrium(
         gfile_data, radial_count, poloidal_sample_point, psi_ratio);
-    const auto r_max = equilibrium.psi_at_wall();
-    const auto delta_r = r_max / radial_count;
 
-    auto get_psi = [&](std::size_t idx) {
-        static const double delta =
-            equilibrium.psi_at_wall() / (radial_count * radial_count);
-        return idx * idx * delta;
-    };
-
+    const auto [psi_min, psi_max] = equilibrium.psi_range();
     double q_min = std::numeric_limits<double>::infinity();
-    for (std::size_t i = 0; i < radial_count; ++i) {
-        q_min = std::min(q_min, equilibrium.safety_factor(get_psi(i + 1)));
+    // position of local minimum of q
+    std::vector<double> q_local_extrema_pos;
+    const auto delta_psi = (psi_max - psi_min) / radial_count;
+    for (double psi = psi_min; psi < psi_max; psi += delta_psi) {
+        auto q = equilibrium.safety_factor(psi);
+        q_min = std::min(q_min, q);
+        if ((q - equilibrium.safety_factor(psi - delta_psi)) *
+                (q - equilibrium.safety_factor(psi + delta_psi)) >
+            0) {
+            q_local_extrema_pos.push_back(psi);
+        }
+    }
+    if (q_local_extrema_pos.size() > 10) {
+        std::cout << "Safety factor profile is pathological.";
+        exit(1);
     }
 
     // toroidal mode numbers
-    std::vector<int> ns{5};
+    std::vector<int> ns{8};
     // poloidal mode numbers
-    std::vector<std::vector<std::pair<int, int>>> m_ranges(radial_count);
-    std::vector<std::vector<double>> continuum(radial_count);
+    std::vector<std::vector<std::pair<int, int>>> m_ranges;
+    std::vector<std::vector<double>> continuum;
 
-    for (std::size_t i = 0; i < radial_count; ++i) {
+    const auto n_max = *std::max_element(ns.begin(), ns.end());
+    constexpr int pt_per_radial_period = 15;
+
+    std::size_t floquet_exponent_sample_pts = 0;
+    std::vector<double> psi_sample_pts;
+    auto zone_iter = q_local_extrema_pos.begin();
+    auto psi_left = psi_min;
+    auto psi_right =
+        zone_iter == q_local_extrema_pos.end()
+            ? psi_max
+            : (*zone_iter - psi_min < EPSILON
+                   ? ++zone_iter == q_local_extrema_pos.end() ? psi_max
+                                                              : *zone_iter
+                   : *zone_iter);
+    const auto get_next_psi = [&psi_left, &psi_right, &zone_iter,
+                               &q_local_extrema_pos, &eq = equilibrium, psi_min,
+                               psi_max](double psi_0, double q_diff) {
+        const auto q_left = eq.safety_factor(psi_left);
+        const auto q_right = eq.safety_factor(psi_right);
+        auto next_q =
+            eq.safety_factor(psi_0) + std::copysign(q_diff, q_right - q_left);
+        const auto max_delta_psi = .01 * (psi_max - psi_min);
+        if ((next_q - q_left) * (next_q - q_right) > 0) {
+            if (zone_iter == q_local_extrema_pos.end()) {
+                // reach right boundary
+                return psi_max;
+            }
+            if (psi_right - psi_0 > max_delta_psi) {
+                return psi_0 + max_delta_psi;
+            }
+            // next monotone zone
+            next_q = eq.safety_factor(*zone_iter);
+            psi_left = psi_right;
+            psi_right =
+                ++zone_iter == q_local_extrema_pos.end() ? psi_max : *zone_iter;
+            return psi_left;
+        }
+        // find next psi according to difference in q, capped by 1% of total psi
+        // to avoid points being sparse near local extrema of q
+        return std::min(util::find_root(
+                            [&eq, next_q](double p) {
+                                return eq.safety_factor(p) - next_q;
+                            },
+                            psi_left, psi_right),
+                        psi_0 + max_delta_psi);
+    };
+    for (double psi = psi_min; psi < psi_max;
+         psi = get_next_psi(psi, 1. / (n_max * pt_per_radial_period))) {
         timer.pause_last_and_start_next("Calculate Floquet exponent");
 
-        const auto r = get_psi(i + 1);
-        const auto local_q = equilibrium.safety_factor(r);
+        const auto local_q = equilibrium.safety_factor(psi);
 
         // convert between global and local normalization of $\omega$
         const auto max_local_omega = local_q / q_min * max_omega;
-        auto calc_floquet_exp = [r, &equilibrium](auto omega) {
+        auto calc_floquet_exp = [psi, &equilibrium](auto omega) {
             const auto omega2 = omega * omega;
-            const auto potential = [omega2, r,
+            const auto potential = [omega2, psi,
                                     &eq = equilibrium](double theta) {
-                return eq.radial_func(r, theta) + omega2 * eq.j_func(r, theta);
+                return eq.radial_func(psi, theta) +
+                       omega2 * eq.j_func(psi, theta);
             };
             const FloquetMatrix flo_mat(
                 potential, std::numbers::pi * 2,
@@ -133,8 +185,8 @@ int main(int argc, char** argv) {
                 const auto it =
                     omega_nu_map.emplace_hint(pt1, omega_mid, nu_actual);
                 constexpr double min_domega = 1.e-3;
-                // NOTE: I don not about imaginary part of \nu, so points in gap
-                // zone will be sparse. Extra subdivisions are done at
+                // NOTE: I don not care about imaginary part of \nu, so points
+                // in gap zone will be sparse. Extra subdivisions are done at
                 // gap-continuum boundary.
                 if ((std::abs(.5 * (nu_0 + nu_1) - nu_actual.real()) >
                          subdivision_err ||
@@ -151,7 +203,9 @@ int main(int argc, char** argv) {
 
         std::vector<decltype(omega_nu_map)::value_type> local_omega_nu(
             omega_nu_map.begin(), omega_nu_map.end());
-        std::cout << i << ", " << local_omega_nu.size() << '\n';
+        std::cout << "psi/psi_w = " << psi / psi_max
+                  << ", omega sample pt = " << local_omega_nu.size() << '\n';
+        floquet_exponent_sample_pts += local_omega_nu.size();
 
         // adjust $\Re\nu$ according to stability region
         std::size_t order = 0;
@@ -180,6 +234,9 @@ int main(int argc, char** argv) {
                     (order % 2 == 0 ? last_real : .5 - last_real));
         }
 
+        m_ranges.emplace_back();
+        continuum.emplace_back();
+
         // calculate omega for each pair of mode numbers (n, m)
         // change normalization of omega to v_{A,0}/R_0 here
         const auto local_max_nu = local_omega_nu.back().second.real();
@@ -188,7 +245,7 @@ int main(int argc, char** argv) {
             std::size_t m_num = 0;
             const int m_lower = std::ceil(n * local_q - local_max_nu);
             const int m_upper = std::floor(n * local_q + local_max_nu);
-            m_ranges[i].emplace_back(m_lower, m_upper);
+            m_ranges.back().emplace_back(m_lower, m_upper);
 
             for (int m = m_lower; m <= m_upper; ++m) {
                 const double kp = n * local_q - m;
@@ -207,11 +264,11 @@ int main(int argc, char** argv) {
                                           });
                 }
                 if (it == local_omega_nu.begin()) {
-                    continuum[i].push_back(0.);
+                    continuum.back().push_back(0.);
                 } else if (it != local_omega_nu.end()) {
                     const auto [omega0, nu0] = *(it - 1);
                     const auto [omega1, nu1] = *it;
-                    continuum[i].push_back(
+                    continuum.back().push_back(
                         (omega0 + (std::abs(kp) - nu0.real()) /
                                       (nu1.real() - nu0.real()) *
                                       (omega1 - omega0)) /
@@ -219,7 +276,13 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        psi_sample_pts.push_back(psi);
     }
+
+    std::cout << "Samples " << psi_sample_pts.size()
+              << " points along radial direction.\n"
+              << "Calculating Fluoquet exponent for "
+              << floquet_exponent_sample_pts << " times.\n";
 
     timer.pause_last_and_start_next("Sort points into lines");
 
@@ -229,14 +292,14 @@ int main(int argc, char** argv) {
     const bool sort_by_m = false;
     if (sort_by_m) {
         // To be deprecated
-        for (std::size_t i = 0; i < radial_count; ++i) {
+        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
+            auto psi = psi_sample_pts[i];
             std::size_t offset = 0;
             for (std::size_t j = 0; j < ns.size(); ++j) {
                 auto [m_lower, m_upper] = m_ranges[i][j];
                 for (int k = 0; k <= m_upper - m_lower; ++k) {
                     lines[std::make_pair(ns[j], k + m_lower)].push_back(
-                        {r_max * static_cast<double>(i) /
-                             static_cast<double>(radial_count),
+                        {equilibrium.minor_radius(psi),
                          continuum[i][k + offset]});
                 }
                 offset += m_upper - m_lower + 1;
@@ -244,11 +307,8 @@ int main(int argc, char** argv) {
         }
     } else {
         // sort by Floquet exponent
-        for (std::size_t i = 0; i < radial_count; ++i) {
-            // Pay attention to radial coordinate, it should be the same as that
-            // used above
-            // TODO: Ensure they are the same
-            const auto psi = get_psi(i + 1);
+        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
+            auto psi = psi_sample_pts[i];
             std::size_t offset = 0;
             for (std::size_t j = 0; j < ns.size(); ++j) {
                 auto [m_lower, m_upper] = m_ranges[i][j];
