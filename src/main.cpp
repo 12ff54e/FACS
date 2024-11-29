@@ -55,7 +55,9 @@ int main(int argc, char** argv) {
     const std::size_t omega_count = 250;
     const double psi_ratio = .96;
     // this value is normalized to $v_{A,0}/(q_min*R_0)$
-    constexpr double max_omega = 1.2;
+    const double max_omega = 1.2;
+    const int max_continuum_zone = 3;
+    const bool omega_limit_by_value = true;
 
     const NumericEquilibrium<double> equilibrium(
         gfile_data, radial_count, poloidal_sample_point, psi_ratio);
@@ -162,18 +164,27 @@ int main(int argc, char** argv) {
         constexpr double subdivision_err = 1.e-3;
         constexpr std::size_t initial_subdivision = 2;
 
-        for (int region = 0; region < max_local_omega * initial_subdivision;
-             ++region) {
-            const auto omega_min = 1. / initial_subdivision * region;
+        std::size_t order = 0;
+        bool increasing = true;
+        bool finish_calc_nu = false;
+        double last_real = -std::numeric_limits<double>::infinity();
+        std::vector<decltype(omega_nu_map)::value_type> local_omega_nu;
+        for (int region = 0; !finish_calc_nu; ++region) {
+            const auto omega_min =
+                static_cast<double>(region) / initial_subdivision;
             const auto omega_max =
-                1. / initial_subdivision * (region + 1) > max_local_omega
+                omega_limit_by_value &&
+                        region + 1 > max_local_omega * initial_subdivision
                     ? max_local_omega
-                    : 1. / initial_subdivision * (region + 1);
-            region_stack.push(
-                {omega_nu_map.emplace(omega_min, calc_floquet_exp(omega_min))
-                     .first,
-                 omega_nu_map.emplace(omega_max, calc_floquet_exp(omega_max))
-                     .first});
+                    : static_cast<double>(region + 1) / initial_subdivision;
+
+            const auto region_begin =
+                omega_nu_map.emplace(omega_min, calc_floquet_exp(omega_min))
+                    .first;
+            const auto region_end =
+                omega_nu_map.emplace(omega_max, calc_floquet_exp(omega_max))
+                    .first;
+            region_stack.push({region_begin, region_end});
 
             while (!region_stack.empty()) {
                 const auto [pt0, pt1] = region_stack.top();
@@ -197,42 +208,54 @@ int main(int argc, char** argv) {
                     region_stack.push({pt0, it});
                 }
             }
+            // stopping criteria using absolute value
+            finish_calc_nu =
+                omega_limit_by_value &&
+                region + 1 >= max_local_omega * initial_subdivision;
+
+            // adjust $\Re\nu$ according to stability region
+            for (auto it = region_begin; it != region_end; ++it) {
+                auto nu = it->second;
+                // normally $\Re\nu$ growth monotonic with $\omega$, but it goes
+                // unchanged inside coutinuum gap, a small margin is added to
+                // avoid misclassifying gap region as another stability
+                // region
+                if (increasing && nu.real() - last_real + EPSILON < 0. &&
+                    last_real > .4) {
+                    // e^{i\nu T} entering lower half plane
+                    increasing = false;
+                    ++order;
+                } else if (!increasing &&
+                           nu.real() - last_real - EPSILON > 0. &&
+                           last_real < .1) {
+                    // e^{i\nu T} entering upper half plane
+                    increasing = true;
+                    ++order;
+                }
+
+                // stopping criteria using continuum zone
+                if (!omega_limit_by_value &&
+                    (order == max_continuum_zone - 1 &&
+                         (nu.real() < EPSILON || .5 - nu.real() < EPSILON) ||
+                     order == max_continuum_zone)) {
+                    // end outer loop too
+                    finish_calc_nu = true;
+                    break;
+                }
+
+                last_real = nu.real();
+                nu.real(.5 * static_cast<double>(order) +
+                        (order % 2 == 0 ? last_real : .5 - last_real));
+                local_omega_nu.emplace_back(it->first, nu);
+            }
         }
 
         timer.pause_last_and_start_next("Solve for omega");
 
-        std::vector<decltype(omega_nu_map)::value_type> local_omega_nu(
-            omega_nu_map.begin(), omega_nu_map.end());
-        std::cout << "psi/psi_w = " << psi / psi_max
+        std::cout << "psi/psi_w = " << std::fixed << std::setprecision(4)
+                  << psi / psi_max
                   << ", omega sample pt = " << local_omega_nu.size() << '\n';
         floquet_exponent_sample_pts += local_omega_nu.size();
-
-        // adjust $\Re\nu$ according to stability region
-        std::size_t order = 0;
-        bool increasing = true;
-        double last_real = local_omega_nu[0].second.real();
-        for (auto& [_, nu] : local_omega_nu) {
-            // normally $\Re\nu$ growth monotonic with $\omega$, but it goes
-            // unchanged inside coutinuum gap, a small margin is added to
-            // avoid misclassifying gap region as another stability
-            // region
-            // TODO: Fix these two ad-hoc check: last_real > .4, < .1
-            if (increasing && nu.real() - last_real + EPSILON < 0. &&
-                last_real > .4) {
-                // e^{i\nu T} entering lower half plane
-                increasing = false;
-                ++order;
-            } else if (!increasing && nu.real() - last_real - EPSILON > 0. &&
-                       last_real < .1) {
-                // e^{i\nu T} entering upper half plane
-                increasing = true;
-                ++order;
-            }
-
-            last_real = nu.real();
-            nu.real(.5 * static_cast<double>(order) +
-                    (order % 2 == 0 ? last_real : .5 - last_real));
-        }
 
         m_ranges.emplace_back();
         continuum.emplace_back();
@@ -282,7 +305,7 @@ int main(int argc, char** argv) {
     std::cout << "Samples " << psi_sample_pts.size()
               << " points along radial direction.\n"
               << "Calculating Fluoquet exponent for "
-              << floquet_exponent_sample_pts << " times.\n";
+              << floquet_exponent_sample_pts << " (r, omega) points.\n";
 
     timer.pause_last_and_start_next("Sort points into lines");
 
