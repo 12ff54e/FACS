@@ -104,6 +104,9 @@ class Spdata {
 
     const auto& intp_data() const { return spdata_intp_; }
 
+    const auto radial_grid_num() const { return lsp_; }
+    const auto poloidal_grid_num() const { return lst_; }
+
    private:
     const bool use_si_;
     const std::size_t lsp_, lst_;

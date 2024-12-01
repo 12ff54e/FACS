@@ -27,42 +27,18 @@ struct hash<pair<int, int>> {
 // Zero criteria for float point numbers
 constexpr double EPSILON = 1.e-6;
 
-// TODO: Add command line input logic
-int main(int argc, char** argv) {
+auto calculate_continuum(const auto& equilibrium,
+                         const auto& ns,
+                         double max_omega,
+                         bool omega_limit_by_value,
+                         std::size_t radial_grid_num = 0) {
     using namespace std::complex_literals;
-
-    if (argc < 2) { return EPERM; }
-    std::string gfile_path = argv[1];
-
     auto& timer = Timer::get_timer();
-    timer.start("Read gfile");
 
-    std::ifstream gfile(gfile_path);
-    if (!gfile.is_open()) {
-        std::cerr << "Can not open g-file.\n";
-        return ENOENT;
-    }
-    GFileRawData gfile_data;
-    gfile >> gfile_data;
-    if (!gfile_data.is_complete()) {
-        std::cerr << "Can not parse g-file.\n";
-        return 0;
-    }
-    gfile.close();
-
-    const std::size_t radial_count = 1000;
-    const std::size_t poloidal_sample_point = 300;
-    const std::size_t omega_count = 250;
-    const double psi_ratio = .96;
-    // this value is normalized to $v_{A,0}/(q_min*R_0)$
-    const double max_omega = 1.2;
-    const int max_continuum_zone = 3;
-    const bool omega_limit_by_value = true;
-
-    const NumericEquilibrium<double> equilibrium(
-        gfile_data, radial_count, poloidal_sample_point, psi_ratio);
+    const std::size_t max_continuum_zone = max_omega;
 
     const auto [psi_min, psi_max] = equilibrium.psi_range();
+    const std::size_t radial_count = equilibrium.radial_grid_num();
     double q_min = std::numeric_limits<double>::infinity();
     // position of local minimum of q
     std::vector<double> q_local_extrema_pos;
@@ -81,8 +57,6 @@ int main(int argc, char** argv) {
         exit(1);
     }
 
-    // toroidal mode numbers
-    std::vector<int> ns{8};
     // poloidal mode numbers
     std::vector<std::vector<std::pair<int, int>>> m_ranges;
     std::vector<std::vector<double>> continuum;
@@ -308,6 +282,51 @@ int main(int argc, char** argv) {
               << floquet_exponent_sample_pts << " (r, omega) points.\n";
 
     timer.pause_last_and_start_next("Sort points into lines");
+
+    // hopefully NRVO works
+    return std::make_tuple(m_ranges, psi_sample_pts, continuum);
+}
+
+#ifdef __EMSCRIPTEN__
+#endif
+
+// TODO: Add command line input logic
+int main(int argc, char** argv) {
+    if (argc < 2) { return EPERM; }
+    std::string gfile_path = argv[1];
+
+    auto& timer = Timer::get_timer();
+    timer.start("Read gfile");
+
+    std::ifstream gfile(gfile_path);
+    if (!gfile.is_open()) {
+        std::cerr << "Can not open g-file.\n";
+        return ENOENT;
+    }
+    GFileRawData gfile_data;
+    gfile >> gfile_data;
+    if (!gfile_data.is_complete()) {
+        std::cerr << "Can not parse g-file.\n";
+        return 0;
+    }
+    gfile.close();
+
+    const std::size_t radial_count = 1000;
+    const std::size_t poloidal_sample_point = 300;
+    const double psi_ratio = .96;
+
+    const NumericEquilibrium<double> equilibrium(
+        gfile_data, radial_count, poloidal_sample_point, psi_ratio);
+
+    // this value is normalized to $v_{A,0}/(q_min*R_0)$
+    const double max_omega = 1.2;
+    const int max_continuum_zone = 3;
+    const bool omega_limit_by_value = true;
+    // toroidal mode numbers
+    std::vector<int> ns{8};
+
+    const auto [m_ranges, psi_sample_pts, continuum] =
+        calculate_continuum(equilibrium, ns, max_omega, omega_limit_by_value);
 
     // sort by (n,m) or (n, \nu) to individual lines
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>

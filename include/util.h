@@ -7,6 +7,9 @@
 #include <stdexcept>
 #include <type_traits>
 #include <vector>
+#if __cpluspluc >= 202002L
+#include <numbers>
+#endif
 
 #include "vec.h"
 
@@ -29,8 +32,13 @@ inline T abs(T x) {
 
 template <typename T>
 inline T arctan(T x, T y) {
+#if __cpluspluc >= 202002L
+    constexpr auto PI = std::numbers::pi_v<T>;
+#else
+    constexpr long double PI = 3.141592653589793238462643383280l;
+#endif
     T atan = std::atan2(y, x);
-    return atan < 0 ? static_cast<T>(2 * static_cast<T>(M_PIl) + atan) : atan;
+    return atan < 0 ? static_cast<T>(2 * static_cast<T>(PI) + atan) : atan;
 }
 
 template <typename T>
@@ -168,7 +176,11 @@ Tx cubic_interpolation(const Tx& a,
  */
 template <typename Func, typename TolFunc, typename Tx>
 Tx find_root(const Func& func, const Tx& ax, const Tx& bx, const TolFunc& tol) {
+#if __cplusplus >= 201703L
+    using Tf = std::invoke_result_t<Func, Tx>;
+#else
     using Tf = typename std::result_of<Func(Tx)>::type;
+#endif
     // control parameters
 
     const unsigned max_iter = 50;

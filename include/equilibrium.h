@@ -36,7 +36,7 @@ struct AnalyticEquilibrium {
 };
 
 template <typename T>
-struct NumericEquilibrium : private Spdata<T> {
+struct NumericEquilibrium : Spdata<T> {
     using value_type = T;
 
     using Spdata<value_type>::intp_data;
