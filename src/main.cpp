@@ -35,7 +35,7 @@ auto calculate_continuum(const auto& equilibrium,
     using namespace std::complex_literals;
     auto& timer = Timer::get_timer();
 
-    const std::size_t max_continuum_zone = max_omega;
+    const int max_continuum_zone = max_omega;
 
     const auto [psi_min, psi_max] = equilibrium.psi_range();
     const std::size_t radial_count = equilibrium.radial_grid_num();
@@ -207,27 +207,29 @@ auto calculate_continuum(const auto& equilibrium,
                     ++order;
                 }
 
+                last_real = nu.real();
+                nu.real(.5 * static_cast<double>(order) +
+                        (order % 2 == 0 ? last_real : .5 - last_real));
+                local_omega_nu.emplace_back(it->first, nu);
+
                 // stopping criteria using continuum zone
                 if (!omega_limit_by_value &&
                     (order == max_continuum_zone - 1 &&
-                         (nu.real() < EPSILON || .5 - nu.real() < EPSILON) ||
+                         (last_real < EPSILON || .5 - last_real < EPSILON) ||
                      order == max_continuum_zone)) {
                     // end outer loop too
                     finish_calc_nu = true;
                     break;
                 }
-
-                last_real = nu.real();
-                nu.real(.5 * static_cast<double>(order) +
-                        (order % 2 == 0 ? last_real : .5 - last_real));
-                local_omega_nu.emplace_back(it->first, nu);
             }
         }
 
         timer.pause_last_and_start_next("Solve for omega");
 
+        const auto default_precision = std::cout.precision();
         std::cout << "psi/psi_w = " << std::fixed << std::setprecision(4)
-                  << psi / psi_max
+                  << psi / psi_max << std::setprecision(default_precision)
+                  << std::defaultfloat
                   << ", omega sample pt = " << local_omega_nu.size() << '\n';
         floquet_exponent_sample_pts += local_omega_nu.size();
 
@@ -321,12 +323,13 @@ int main(int argc, char** argv) {
     // this value is normalized to $v_{A,0}/(q_min*R_0)$
     const double max_omega = 1.2;
     const int max_continuum_zone = 3;
-    const bool omega_limit_by_value = true;
+    const bool omega_limit_by_value = false;
     // toroidal mode numbers
     std::vector<int> ns{8};
 
-    const auto [m_ranges, psi_sample_pts, continuum] =
-        calculate_continuum(equilibrium, ns, max_omega, omega_limit_by_value);
+    const auto [m_ranges, psi_sample_pts, continuum] = calculate_continuum(
+        equilibrium, ns, omega_limit_by_value ? max_omega : max_continuum_zone,
+        omega_limit_by_value);
 
     // sort by (n,m) or (n, \nu) to individual lines
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
