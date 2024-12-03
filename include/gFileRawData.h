@@ -88,7 +88,7 @@ struct GFileRawData {
 
     // operators
 
-    friend std::ifstream& operator>>(std::ifstream&, GFileRawData&);
+    friend std::istream& operator>>(std::istream&, GFileRawData&);
 
    private:
     // the completeness of raw data

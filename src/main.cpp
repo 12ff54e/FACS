@@ -14,6 +14,35 @@
 #define ZQ_TIMER_IMPLEMENTATION
 #include "timer.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/console.h>
+#include <emscripten/wasm_worker.h>
+#include <sstream>
+
+// every member should be zero-initialized, which is exactly the behavior of
+// that of static storage duration
+struct State {
+    bool finish_calculation;
+    bool stats_printed;
+    int drawn_index;
+    int pt_num;
+    double pts[4000];
+    std::string gfile_content;
+    emscripten_wasm_worker_t worker_id;
+};
+
+auto& get_state() {
+    static State state;
+    return state;
+}
+
+// TODO: Provide data for downloading
+// TODO: Use more robust method than shared memory Wasm worker
+// TODO: Add input logic
+// TODO: More flexible preview drawing
+#endif
+
 // inject hash function for pair of int
 namespace std {
 template <>
@@ -129,6 +158,7 @@ auto calculate_continuum(const auto& equilibrium,
             // imaginary part not less than 0
             return std::log(flo_mat.eigenvalue()) / (2.i * std::numbers::pi);
         };
+        // TODO: change to vector
         std::map<double, std::complex<double>> omega_nu_map;
         std::stack<std::pair<decltype(omega_nu_map)::iterator,
                              decltype(omega_nu_map)::iterator>>
@@ -225,12 +255,17 @@ auto calculate_continuum(const auto& equilibrium,
         }
 
         timer.pause_last_and_start_next("Solve for omega");
-
-        const auto default_precision = std::cout.precision();
-        std::cout << "psi/psi_w = " << std::fixed << std::setprecision(4)
-                  << psi / psi_max << std::setprecision(default_precision)
-                  << std::defaultfloat
-                  << ", omega sample pt = " << local_omega_nu.size() << '\n';
+        {
+            std::ostringstream oss;
+            oss << "psi/psi_w = " << std::fixed << std::setprecision(4)
+                << psi / psi_max
+                << ", omega sample pt = " << local_omega_nu.size() << '\n';
+#ifdef __EMSCRIPTEN__
+            emscripten_out(oss.str().c_str());
+#else
+            std::cout << oss.str();
+#endif
+        }
         floquet_exponent_sample_pts += local_omega_nu.size();
 
         m_ranges.emplace_back();
@@ -276,24 +311,128 @@ auto calculate_continuum(const auto& equilibrium,
             }
         }
         psi_sample_pts.push_back(psi);
+
+#ifdef __EMSCRIPTEN__
+        double w0 = continuum.back()[0];
+        double w1 = continuum.back()[1];
+        double w2 = continuum.back()[2];
+
+        // bubble sort
+        if (w0 > w1) { std::swap(w0, w1); }
+        if (w1 > w2) { std::swap(w1, w2); }
+        if (w0 > w1) { std::swap(w0, w1); }
+
+        auto& pts = get_state().pts;
+        auto& pt_num = get_state().pt_num;
+
+        pts[4 * pt_num] = equilibrium.minor_radius(psi);
+        pts[4 * pt_num + 1] = w0;
+        pts[4 * pt_num + 2] = w1;
+        pts[4 * pt_num + 3] = w2;
+
+        ++pt_num;
+#endif
     }
-
-    std::cout << "Samples " << psi_sample_pts.size()
-              << " points along radial direction.\n"
-              << "Calculating Fluoquet exponent for "
-              << floquet_exponent_sample_pts << " (r, omega) points.\n";
-
-    timer.pause_last_and_start_next("Sort points into lines");
+    {
+        std::ostringstream oss;
+        oss << "Samples " << psi_sample_pts.size()
+            << " points along radial direction.\n"
+            << "Calculating Fluoquet exponent for "
+            << floquet_exponent_sample_pts << " (r, omega) points.\n";
+#ifdef __EMSCRIPTEN__
+        get_state().finish_calculation = true;  // mark finish
+        emscripten_out(oss.str().c_str());
+#else
+        std::cout << oss.str();
+#endif
+    }
 
     // hopefully NRVO works
     return std::make_tuple(m_ranges, psi_sample_pts, continuum);
 }
 
 #ifdef __EMSCRIPTEN__
+char worker_stack[8192];
+
+void calculate_continuum_in_worker() {
+    auto& timer = Timer::get_timer();
+    timer.start("Read gfile");
+
+    GFileRawData gfile_data;
+    std::istringstream gfile(get_state().gfile_content);
+    gfile >> gfile_data;
+
+    if (!gfile_data.is_complete()) {
+        emscripten_out("Can not parse g-file.\n");
+        exit(1);
+    }
+
+    const std::size_t radial_count = 1000;
+    const std::size_t poloidal_sample_point = 300;
+    const double psi_ratio = .96;
+
+    const NumericEquilibrium<double> equilibrium(
+        gfile_data, radial_count, poloidal_sample_point, psi_ratio);
+
+    emscripten_out("Equilibrium construction complete.\n");
+
+    // this value is normalized to $v_{A,0}/(q_min*R_0)$
+    const double max_omega = 1.2;
+    const int max_continuum_zone = 3;
+    const bool omega_limit_by_value = false;
+    // toroidal mode numbers
+    std::vector<int> ns{8};
+
+    calculate_continuum(equilibrium, ns,
+                        omega_limit_by_value ? max_omega : max_continuum_zone,
+                        omega_limit_by_value);
+    timer.pause();
+}
+
+void draw_pts() {
+    const auto current_idx = get_state().pt_num;
+    auto& last_idx = get_state().drawn_index;
+    const auto& pts = get_state().pts;
+
+    if (current_idx > last_idx) {
+        for (int i = last_idx; i < current_idx; ++i) {
+            EM_ASM(
+                { draw_point($0, $1, $2, $3); }, pts[4 * i], pts[4 * i + 1],
+                pts[4 * i + 2], pts[4 * i + 3]);
+        }
+    }
+    last_idx = current_idx;
+    if (get_state().finish_calculation && !get_state().stats_printed) {
+        auto& timer = Timer::get_timer();
+        timer.print();
+        get_state().stats_printed = true;
+    }
+}
 #endif
 
 // TODO: Add command line input logic
 int main(int argc, char** argv) {
+#ifdef __EMSCRIPTEN__
+    // use EMSCRIPTEN internal file system
+    std::ifstream gfile("/gfile");
+    std::ostringstream buffer;
+    buffer << gfile.rdbuf();
+    get_state().gfile_content = buffer.str();
+    gfile.close();
+
+    auto wasm_worker =
+        emscripten_create_wasm_worker(worker_stack, sizeof(worker_stack));
+
+    if (wasm_worker == 0) {
+        std::cout << "Failed to create Wasm worker.\n";
+        return 1;
+    }
+    get_state().worker_id = wasm_worker;
+    emscripten_wasm_worker_post_function_v(wasm_worker,
+                                           calculate_continuum_in_worker);
+
+    emscripten_set_main_loop(draw_pts, 0, false);
+#else
     if (argc < 2) { return EPERM; }
     std::string gfile_path = argv[1];
 
@@ -330,6 +469,8 @@ int main(int argc, char** argv) {
     const auto [m_ranges, psi_sample_pts, continuum] = calculate_continuum(
         equilibrium, ns, omega_limit_by_value ? max_omega : max_continuum_zone,
         omega_limit_by_value);
+
+    timer.pause_last_and_start_next("Sort points into lines");
 
     // sort by (n,m) or (n, \nu) to individual lines
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
@@ -395,5 +536,6 @@ int main(int argc, char** argv) {
     timer.pause();
     timer.print();
 
+#endif
     return 0;
 }
