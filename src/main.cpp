@@ -14,6 +14,16 @@
 #define ZQ_TIMER_IMPLEMENTATION
 #include "timer.h"
 
+// inject hash function for pair of int
+namespace std {
+template <>
+struct hash<pair<int, int>> {
+    auto operator()(const pair<int, int>& p) const noexcept {
+        return hash<int>{}(p.first) ^ (hash<int>{}(p.second) << 1);
+    }
+};
+};  // namespace std
+
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 #include <emscripten/console.h>
@@ -30,6 +40,10 @@ struct State {
     double pts[4000];
     std::string gfile_content;
     emscripten_wasm_worker_t worker_id;
+
+    // result
+    std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
+        lines;
 };
 
 auto& get_state() {
@@ -42,16 +56,6 @@ auto& get_state() {
 // TODO: Add input logic
 // TODO: More flexible preview drawing
 #endif
-
-// inject hash function for pair of int
-namespace std {
-template <>
-struct hash<pair<int, int>> {
-    auto operator()(const pair<int, int>& p) const noexcept {
-        return hash<int>{}(p.first) ^ (hash<int>{}(p.second) << 1);
-    }
-};
-};  // namespace std
 
 // Zero criteria for float point numbers
 constexpr double EPSILON = 1.e-6;
@@ -351,6 +355,54 @@ auto calculate_continuum(const auto& equilibrium,
     return std::make_tuple(m_ranges, psi_sample_pts, continuum);
 }
 
+auto sort_points_into_lines(const auto& equilibrium,
+                            const auto& ns,
+                            const auto& m_ranges,
+                            const auto& psi_sample_pts,
+                            const auto& continuum) {
+    // sort by (n,m) or (n, \nu) to individual lines
+    std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
+        lines;
+    const bool sort_by_m = false;
+    if (sort_by_m) {
+        // To be deprecated
+        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
+            auto psi = psi_sample_pts[i];
+            std::size_t offset = 0;
+            for (std::size_t j = 0; j < ns.size(); ++j) {
+                auto [m_lower, m_upper] = m_ranges[i][j];
+                for (int k = 0; k <= m_upper - m_lower; ++k) {
+                    lines[std::make_pair(ns[j], k + m_lower)].push_back(
+                        {equilibrium.minor_radius(psi),
+                         continuum[i][k + offset]});
+                }
+                offset += m_upper - m_lower + 1;
+            }
+        }
+    } else {
+        // sort by Floquet exponent
+        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
+            auto psi = psi_sample_pts[i];
+            std::size_t offset = 0;
+            for (std::size_t j = 0; j < ns.size(); ++j) {
+                auto [m_lower, m_upper] = m_ranges[i][j];
+                for (int k = 0; k <= m_upper - m_lower; ++k) {
+                    const int kp = std::floor(std::abs(
+                        .5 +
+                        std::floor(2 * (ns[j] * equilibrium.safety_factor(psi) -
+                                        (k + m_lower)))));
+                    lines[std::make_pair(ns[j], kp)].push_back(
+                        {equilibrium.minor_radius(psi),
+                         continuum[i][k + offset]});
+                }
+                offset += m_upper - m_lower + 1;
+            }
+        }
+    }
+
+    return lines;
+}
+
 #ifdef __EMSCRIPTEN__
 char worker_stack[8192];
 
@@ -383,9 +435,14 @@ void calculate_continuum_in_worker() {
     // toroidal mode numbers
     std::vector<int> ns{8};
 
-    calculate_continuum(equilibrium, ns,
-                        omega_limit_by_value ? max_omega : max_continuum_zone,
-                        omega_limit_by_value);
+    auto [m_ranges, psi_sample_pts, continuum] = calculate_continuum(
+        equilibrium, ns, omega_limit_by_value ? max_omega : max_continuum_zone,
+        omega_limit_by_value);
+
+    timer.pause_last_and_start_next("Sort points into lines");
+
+    get_state().lines = sort_points_into_lines(equilibrium, ns, m_ranges,
+                                               psi_sample_pts, continuum);
     timer.pause();
 }
 
@@ -404,8 +461,20 @@ void draw_pts() {
     last_idx = current_idx;
     if (get_state().finish_calculation && !get_state().stats_printed) {
         auto& timer = Timer::get_timer();
+        timer.start("Output");
+
+        std::ofstream output("/continuum");
+        for (auto& line : get_state().lines) {
+            const auto& [nm, coords] = line;
+            output << nm.first << ' ' << nm.second << ' ';
+            for (auto pt : coords) { output << pt[0] << ' ' << pt[1] << ' '; }
+            output << '\n';
+        }
+        timer.pause();
         timer.print();
         get_state().stats_printed = true;
+
+        EM_ASM({ enable_download(); });
     }
 }
 #endif
@@ -473,44 +542,8 @@ int main(int argc, char** argv) {
     timer.pause_last_and_start_next("Sort points into lines");
 
     // sort by (n,m) or (n, \nu) to individual lines
-    std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
-        lines;
-    const bool sort_by_m = false;
-    if (sort_by_m) {
-        // To be deprecated
-        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
-            auto psi = psi_sample_pts[i];
-            std::size_t offset = 0;
-            for (std::size_t j = 0; j < ns.size(); ++j) {
-                auto [m_lower, m_upper] = m_ranges[i][j];
-                for (int k = 0; k <= m_upper - m_lower; ++k) {
-                    lines[std::make_pair(ns[j], k + m_lower)].push_back(
-                        {equilibrium.minor_radius(psi),
-                         continuum[i][k + offset]});
-                }
-                offset += m_upper - m_lower + 1;
-            }
-        }
-    } else {
-        // sort by Floquet exponent
-        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
-            auto psi = psi_sample_pts[i];
-            std::size_t offset = 0;
-            for (std::size_t j = 0; j < ns.size(); ++j) {
-                auto [m_lower, m_upper] = m_ranges[i][j];
-                for (int k = 0; k <= m_upper - m_lower; ++k) {
-                    const int kp = std::floor(std::abs(
-                        .5 +
-                        std::floor(2 * (ns[j] * equilibrium.safety_factor(psi) -
-                                        (k + m_lower)))));
-                    lines[std::make_pair(ns[j], kp)].push_back(
-                        {equilibrium.minor_radius(psi),
-                         continuum[i][k + offset]});
-                }
-                offset += m_upper - m_lower + 1;
-            }
-        }
-    }
+    auto lines = sort_points_into_lines(equilibrium, ns, m_ranges,
+                                        psi_sample_pts, continuum);
 
     timer.pause_last_and_start_next("Output");
 

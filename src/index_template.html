@@ -63,17 +63,12 @@
       <div style="grid-column: auto / span 2">
         <input type="file" id="gfile" name="gfile" disabled />
       </div>
+      <div>
+        <button id="download" disabled>Download data</button>
+      </div>
     </div>
     <div class="emscripten_border">
       <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1 width=1200 height=400></canvas>
-    </div>
-    <hr/>
-    <div class="emscripten">
-      <input type="checkbox" id="resize">Resize canvas
-      <input type="checkbox" id="pointerLock" checked>Lock/hide mouse pointer
-      &nbsp;&nbsp;&nbsp;
-      <input type="button" value="Fullscreen" onclick="Module.requestFullscreen(document.getElementById('pointerLock').checked, 
-                                                                                document.getElementById('resize').checked)">
     </div>
     <hr/>
     <textarea class="emscripten" id="output" rows="8"></textarea>
@@ -150,18 +145,34 @@
 
       const gfile_input = document.getElementById("gfile");
       gfile_input.addEventListener("change", (e) => {
-            if(gfile_input.files.length == 0) {
-                console.log("Select a g-file!");
-                return;
-            }
+        if(gfile_input.files.length == 0) {
+          console.log("Select a g-file!");
+          return;
+        }
 
-            const gfile = gfile_input.files.item(0);
-            gfile.arrayBuffer().then(ab => {
-                FS.writeFile("/gfile", new Uint8Array(ab));
-                Module._main();
-            }).catch(err => { console.log(err); });
+        const gfile = gfile_input.files.item(0);
+        gfile.arrayBuffer().then(ab => {
+          FS.writeFile("/gfile", new Uint8Array(ab));
+          Module._main();
+        }).catch(err => { console.log(err); });
       })
       gfile_input.disabled = false;
+
+      const download = document.getElementById("download");
+      download.addEventListener("click", (e) => {
+        e.preventDefault();
+        const lines = FS.readFile("/continuum", { encoding: "utf8" });
+
+        const link = document.createElement("a");
+        const blob = new Blob([lines], { type: "text/plain" });
+        link.href = URL.createObjectURL(blob);
+        link.download = `continuum`;
+        link.style.display = 'none';
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      });
 
       const canvas = document.getElementById("canvas");
       const ctx = canvas.getContext("2d");
@@ -186,6 +197,10 @@
         ctx.beginPath();
         ctx.ellipse(r*w, (1.-w3/1.5)*h, 3, 3, 0, 0, 2*Math.PI);
         ctx.fill();
+      }
+
+      function enable_download() {
+        download.disabled = false;
       }
 
 
