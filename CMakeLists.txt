@@ -56,7 +56,7 @@ set_property(TARGET index PROPERTY LINK_DEPENDS ${shell_file})
 target_compile_options(index PUBLIC -fwasm-exceptions)
 target_link_options(index PUBLIC -fwasm-exceptions)
 # Don't run main function at startup
-target_link_options(index PUBLIC -sINVOKE_RUN=0 -sEXPORTED_FUNCTIONS=_main)
+target_link_options(index PUBLIC -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=[callMain])
 # memory settings
 target_link_options(index PUBLIC -sALLOW_MEMORY_GROWTH=1)
 # wasm worker

@@ -1,18 +1,33 @@
-#include <algorithm>  // lower_bound, upper_bound, max_element
-#include <cmath>      // ceil, floor
-#include <filesystem>
+#include <algorithm>   // lower_bound, upper_bound, max_element
+#include <cmath>       // ceil, floor
+#include <cstdlib>     // exit
+#include <filesystem>  // path
 #include <iostream>
 #include <map>
 #include <numbers>  // pi
+#include <sstream>
 #include <stack>
 #include <unordered_map>
 
 #include "Floquet.h"
+#include "clap.h"
 #include "equilibrium.h"
 #include "integrator.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/console.h>  // emscripten_out
+#include <emscripten/wasm_worker.h>
+
+// TODO: Add input logic
+// TODO: More flexible preview drawing
+#endif
+
 #define ZQ_TIMER_IMPLEMENTATION
 #include "timer.h"
+
+constexpr double psi_ratio = 0.98;
+constexpr std::size_t poloidal_sample_point = 256;
 
 // inject hash function for pair of int
 namespace std {
@@ -24,22 +39,37 @@ struct hash<pair<int, int>> {
 };
 };  // namespace std
 
-#ifdef __EMSCRIPTEN__
-#include <emscripten.h>
-#include <emscripten/console.h>
-#include <emscripten/wasm_worker.h>
-#include <sstream>
+struct Input {
+    int max_continuum_zone;
+    int radial_grid_num;
+    double max_omega_value;
+    std::string gfile_path;
+    std::string output_path;
+    std::string toroidal_mode_num_str;
+
+    bool omega_limit_by_value() const { return max_continuum_zone == 0; }
+};
 
 // every member should be zero-initialized, which is exactly the behavior of
 // that of static storage duration
 struct State {
+#ifdef __EMSCRIPTEN__
+    // flow control
     bool finish_calculation;
     bool stats_printed;
+
+    // for real time preview
     int drawn_index;
     int pt_num;
     double pts[4000];
-    std::string gfile_content;
+
+    // worker state
     emscripten_wasm_worker_t worker_id;
+#endif
+    // input
+    Input input;
+    std::string gfile_content;
+    std::vector<int> ns;
 
     // result
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
@@ -51,34 +81,24 @@ auto& get_state() {
     return state;
 }
 
-// TODO: Provide data for downloading
-// TODO: Use more robust method than shared memory Wasm worker
-// TODO: Add input logic
-// TODO: More flexible preview drawing
-#endif
-
 // Zero criteria for float point numbers
 constexpr double EPSILON = 1.e-6;
 
-auto calculate_continuum(const auto& equilibrium,
-                         const auto& ns,
-                         double max_omega,
-                         bool omega_limit_by_value,
-                         std::size_t radial_grid_num = 0) {
+auto calculate_continuum(const auto& equilibrium) {
+    const auto omega_limit_by_value = get_state().input.omega_limit_by_value();
+    const auto max_continuum_zone = get_state().input.max_continuum_zone;
+
     using namespace std::complex_literals;
     auto& timer = Timer::get_timer();
 
-    const int max_continuum_zone = max_omega;
-
     const auto [psi_min, psi_max] = equilibrium.psi_range();
     const std::size_t radial_count = equilibrium.radial_grid_num();
-    double q_min = std::numeric_limits<double>::infinity();
+
     // position of local minimum of q
     std::vector<double> q_local_extrema_pos;
     const auto delta_psi = (psi_max - psi_min) / radial_count;
     for (double psi = psi_min; psi < psi_max; psi += delta_psi) {
         auto q = equilibrium.safety_factor(psi);
-        q_min = std::min(q_min, q);
         if ((q - equilibrium.safety_factor(psi - delta_psi)) *
                 (q - equilibrium.safety_factor(psi + delta_psi)) >
             0) {
@@ -90,10 +110,13 @@ auto calculate_continuum(const auto& equilibrium,
         exit(1);
     }
 
+    const auto q0 = equilibrium.safety_factor(0);
+
     // poloidal mode numbers
     std::vector<std::vector<std::pair<int, int>>> m_ranges;
     std::vector<std::vector<double>> continuum;
 
+    const auto& ns = get_state().ns;
     const auto n_max = *std::max_element(ns.begin(), ns.end());
     constexpr int pt_per_radial_period = 15;
 
@@ -147,7 +170,8 @@ auto calculate_continuum(const auto& equilibrium,
         const auto local_q = equilibrium.safety_factor(psi);
 
         // convert between global and local normalization of $\omega$
-        const auto max_local_omega = local_q / q_min * max_omega;
+        const auto max_local_omega =
+            local_q / q0 * get_state().input.max_omega_value;
         auto calc_floquet_exp = [psi, &equilibrium](auto omega) {
             const auto omega2 = omega * omega;
             const auto potential = [omega2, psi,
@@ -356,7 +380,6 @@ auto calculate_continuum(const auto& equilibrium,
 }
 
 auto sort_points_into_lines(const auto& equilibrium,
-                            const auto& ns,
                             const auto& m_ranges,
                             const auto& psi_sample_pts,
                             const auto& continuum) {
@@ -364,6 +387,7 @@ auto sort_points_into_lines(const auto& equilibrium,
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
         lines;
     const bool sort_by_m = false;
+    const auto& ns = get_state().ns;
     if (sort_by_m) {
         // To be deprecated
         for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
@@ -403,48 +427,61 @@ auto sort_points_into_lines(const auto& equilibrium,
     return lines;
 }
 
-#ifdef __EMSCRIPTEN__
-char worker_stack[8192];
-
-void calculate_continuum_in_worker() {
+void gfile_to_continuum_lines() {
     auto& timer = Timer::get_timer();
-    timer.start("Read gfile");
+    const auto& input = get_state().input;
 
+    timer.start("Construct Equilibrium");
+    std::istringstream gfile_stream(get_state().gfile_content);
     GFileRawData gfile_data;
-    std::istringstream gfile(get_state().gfile_content);
-    gfile >> gfile_data;
-
+    gfile_stream >> gfile_data;
     if (!gfile_data.is_complete()) {
-        emscripten_out("Can not parse g-file.\n");
-        exit(1);
+        std::cerr << "Can not parse g-file.\n";
+        std::exit(0);
     }
 
-    const std::size_t radial_count = 1000;
-    const std::size_t poloidal_sample_point = 300;
-    const double psi_ratio = .96;
-
     const NumericEquilibrium<double> equilibrium(
-        gfile_data, radial_count, poloidal_sample_point, psi_ratio);
+        gfile_data, input.radial_grid_num, poloidal_sample_point, psi_ratio);
 
-    emscripten_out("Equilibrium construction complete.\n");
+    timer.pause();
 
-    // this value is normalized to $v_{A,0}/(q_min*R_0)$
-    const double max_omega = 1.2;
-    const int max_continuum_zone = 3;
-    const bool omega_limit_by_value = false;
-    // toroidal mode numbers
-    std::vector<int> ns{8};
-
-    auto [m_ranges, psi_sample_pts, continuum] = calculate_continuum(
-        equilibrium, ns, omega_limit_by_value ? max_omega : max_continuum_zone,
-        omega_limit_by_value);
+    const auto [m_ranges, psi_sample_pts, continuum] =
+        calculate_continuum(equilibrium);
 
     timer.pause_last_and_start_next("Sort points into lines");
 
-    get_state().lines = sort_points_into_lines(equilibrium, ns, m_ranges,
+    // sort by (n,m) or (n, \nu) to individual lines
+    get_state().lines = sort_points_into_lines(equilibrium, m_ranges,
                                                psi_sample_pts, continuum);
     timer.pause();
-}
+};
+
+void output() {
+    auto& timer = Timer::get_timer();
+    timer.start("Output");
+
+    const auto& output_path = get_state().input.output_path;
+    std::ofstream output(output_path);
+    if (!output.is_open()) {
+        std::cerr << "Failed to open " << std::quoted(output_path)
+                  << " for write.";
+        std::exit(ENOENT);
+    }
+    for (auto& line : get_state().lines) {
+        const auto& [nm, coords] = line;
+        output << nm.first << ' ' << nm.second << ' ';
+        for (auto pt : coords) { output << pt[0] << ' ' << pt[1] << ' '; }
+        output << '\n';
+    }
+
+    output.close();
+
+    timer.pause();
+    timer.print();
+};
+
+#ifdef __EMSCRIPTEN__
+char worker_stack[8192];
 
 void draw_pts() {
     const auto current_idx = get_state().pt_num;
@@ -460,18 +497,7 @@ void draw_pts() {
     }
     last_idx = current_idx;
     if (get_state().finish_calculation && !get_state().stats_printed) {
-        auto& timer = Timer::get_timer();
-        timer.start("Output");
-
-        std::ofstream output("/continuum");
-        for (auto& line : get_state().lines) {
-            const auto& [nm, coords] = line;
-            output << nm.first << ' ' << nm.second << ' ';
-            for (auto pt : coords) { output << pt[0] << ' ' << pt[1] << ' '; }
-            output << '\n';
-        }
-        timer.pause();
-        timer.print();
+        output();
         get_state().stats_printed = true;
 
         EM_ASM({ enable_download(); });
@@ -479,16 +505,99 @@ void draw_pts() {
 }
 #endif
 
-// TODO: Add command line input logic
 int main(int argc, char** argv) {
-#ifdef __EMSCRIPTEN__
-    // use EMSCRIPTEN internal file system
-    std::ifstream gfile("/gfile");
+    CLAP_BEGIN(Input)
+    CLAP_ADD_USAGE("[OPTION]... INPUT_FILE")
+    CLAP_ADD_DESCRIPTION(
+        "Calculate Alfvenic continuum of the given equilibrium.")
+    CLAP_REGISTER_ARG(gfile_path)
+    CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
+        max_continuum_zone, "--max-continuum-zone", "-m",
+        "Specify the maximum continuum zone for omega. For example, set it to "
+        "2 if you just want to check the TAE gap.")
+    CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
+        max_omega_value, "--max-value",
+        "Specify maximum omega value, in the unit of v_{A,0}/R_0.")
+    CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
+        output_path, "--output-path", "-o",
+        "Specify the path of output file, default to '$PWD/continuum-${input "
+        "file name}'")
+
+    // TODO: implement the fixed radial grid num option
+    CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
+        radial_grid_num, "--radial-grid-num",
+        "Number of radial grid. Radial grid will be determined adaptively if "
+        "this value is not given.")
+    CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
+        toroidal_mode_num_str, "--toroidal-mode-number", "-n",
+        "Toroidal mode number list, should be seperated by comma.")
+    CLAP_END(Input)
+
+    auto& input = get_state().input;
+    input.radial_grid_num = 512;
+
+    try {
+        CLAP<Input>::parse_input(input, argc, argv);
+    } catch (std::exception& e) {
+        std::cout << e.what();
+        return EINVAL;
+    }
+
+    // check input options
+
+    if (input.gfile_path.empty()) {
+        std::cerr << "Please provide input file.\n";
+        return ENOENT;
+    }
+    if (input.toroidal_mode_num_str.empty()) {
+        std::cout << "Specify at least one toroidal mode number.\n";
+        return EINVAL;
+    }
+    // parse toroidal mode numbers
+    if (([](const auto& str, auto& ns) {
+            int idx = 0;
+            do {
+                int n = std::atoi(str.c_str() + idx);
+                if (n == 0) { return true; }
+                ns.push_back(n);
+
+                idx = str.find(',', idx);
+            } while (idx != str.npos && ++idx != str.size());
+            return false;
+        })(input.toroidal_mode_num_str, get_state().ns)) {
+        std::cout << "Can not recognize the given toroidal mode number(s).\n";
+        return EINVAL;
+    }
+
+    if (input.output_path.empty()) {
+        // filename only will be treated as relative path to current working
+        // directory
+        input.output_path =
+            std::string{"continuum-"} +
+            std::filesystem::path{input.gfile_path}.filename().string();
+    }
+    if (input.max_omega_value == 0 && input.max_continuum_zone == 0) {
+        std::cout << "User do no specify maximum value of omega, use `-m 2` as "
+                     "default.\n";
+        input.max_continuum_zone = 2;
+    }
+
+    auto& timer = Timer::get_timer();
+    timer.start("Read gfile");
+
+    std::ifstream gfile(input.gfile_path);
+    if (!gfile.is_open()) {
+        std::cerr << "Can not open g-file.\n";
+        return ENOENT;
+    }
     std::ostringstream buffer;
     buffer << gfile.rdbuf();
     get_state().gfile_content = buffer.str();
     gfile.close();
 
+    timer.pause();
+
+#ifdef __EMSCRIPTEN__  // delegates to wasm worker
     auto wasm_worker =
         emscripten_create_wasm_worker(worker_stack, sizeof(worker_stack));
 
@@ -498,77 +607,13 @@ int main(int argc, char** argv) {
     }
     get_state().worker_id = wasm_worker;
     emscripten_wasm_worker_post_function_v(wasm_worker,
-                                           calculate_continuum_in_worker);
+                                           gfile_to_continuum_lines);
 
     emscripten_set_main_loop(draw_pts, 0, false);
-#else
-    if (argc < 2) { return EPERM; }
-    std::string gfile_path = argv[1];
-
-    auto& timer = Timer::get_timer();
-    timer.start("Read gfile");
-
-    std::ifstream gfile(gfile_path);
-    if (!gfile.is_open()) {
-        std::cerr << "Can not open g-file.\n";
-        return ENOENT;
-    }
-    GFileRawData gfile_data;
-    gfile >> gfile_data;
-    if (!gfile_data.is_complete()) {
-        std::cerr << "Can not parse g-file.\n";
-        return 0;
-    }
-    gfile.close();
-
-    const std::size_t radial_count = 1000;
-    const std::size_t poloidal_sample_point = 300;
-    const double psi_ratio = .96;
-
-    const NumericEquilibrium<double> equilibrium(
-        gfile_data, radial_count, poloidal_sample_point, psi_ratio);
-
-    // this value is normalized to $v_{A,0}/(q_min*R_0)$
-    const double max_omega = 1.2;
-    const int max_continuum_zone = 3;
-    const bool omega_limit_by_value = false;
-    // toroidal mode numbers
-    std::vector<int> ns{8};
-
-    const auto [m_ranges, psi_sample_pts, continuum] = calculate_continuum(
-        equilibrium, ns, omega_limit_by_value ? max_omega : max_continuum_zone,
-        omega_limit_by_value);
-
-    timer.pause_last_and_start_next("Sort points into lines");
-
-    // sort by (n,m) or (n, \nu) to individual lines
-    auto lines = sort_points_into_lines(equilibrium, ns, m_ranges,
-                                        psi_sample_pts, continuum);
-
-    timer.pause_last_and_start_next("Output");
-
-    // output
-    auto output_file_name =
-        std::string{"continuum-"} +
-        std::filesystem::path(gfile_path).filename().string();
-    std::ofstream output(output_file_name);
-    if (!output.is_open()) {
-        std::cerr << "Failed to open " << std::quoted(output_file_name)
-                  << " for write.";
-        return ENOENT;
-    }
-    for (auto& line : lines) {
-        const auto& [nm, coords] = line;
-        output << nm.first << ' ' << nm.second << ' ';
-        for (auto pt : coords) { output << pt[0] << ' ' << pt[1] << ' '; }
-        output << '\n';
-    }
-
-    output.close();
-
-    timer.pause();
-    timer.print();
-
+#else  // perform calculation in main thread
+    gfile_to_continuum_lines();
+    output();
 #endif
+
     return 0;
 }

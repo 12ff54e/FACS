@@ -65,6 +65,12 @@ struct NumericEquilibrium : Spdata<T> {
     }
 
     auto safety_factor(value_type psi) const {
+        const auto [psi_min, _] = psi_range();
+
+        if (psi < psi_min) {
+            return util::lerp(this->spdata_raw_.axis_value_1d[0],
+                              intp_data().intp_1d[0](psi_min), psi / psi_min);
+        }
         return intp_data().intp_1d[0](psi);
     }
 

@@ -107,7 +107,7 @@ class Spdata {
     const auto radial_grid_num() const { return lsp_; }
     const auto poloidal_grid_num() const { return lst_; }
 
-   private:
+   protected:
     const bool use_si_;
     const std::size_t lsp_, lst_;
     const value_type psi_delta_;
