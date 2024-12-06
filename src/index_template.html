@@ -44,11 +44,17 @@
         to {transform: rotate(360deg);}
       }
 
-      #style-control {
+      #input {
         display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
         row-gap: 10px;
+        column-gap: 5px;
         align-items: center;
+      }
+
+      #input > div {
+        margin: 5px;
+        padding: 5px 0px;
       }
     </style>
   </head>
@@ -59,14 +65,44 @@
     <div class="emscripten">
       <progress value="0" max="100" id="progress" hidden=1></progress>
     </div>
-    <div class="emscripten" style="margin-bottom: 1em" id="style-control">
-      <div style="grid-column: auto / span 2">
-        <input type="file" id="gfile" name="gfile" disabled />
+    <form class="emscripten" id="input">
+      <div>
+        <input type="file" id="gfile" name="gfile" required />
       </div>
       <div>
         <button id="download" disabled>Download data</button>
       </div>
-    </div>
+      <div
+        style="
+          grid-column: auto / span 2;
+          display: flex;
+          justify-content: space-evenly;
+          border: threedface groove 2px;
+        "
+      >
+        <fieldset style="border: none">
+          <div>
+            <input type="radio" name="omega-limit-type" value="--max-continuum-zone" checked />
+            <label for="--max-continuum-zone">Continuum Zone</label>
+          </div>
+          <div>
+            <input type="radio" name="omega-limit-type" value="--max-value" />
+            <label for="--max-value">Value</label>
+          </div>
+        </fieldset>
+        <div>
+          <input type="number" id="max-omega" name="max-omega" required/>
+        </div>
+      </div>
+      <div>
+        <input type="text" id="toroidal-mode" name="--toroidal-mode-number" required />
+        <label for="--toroidal-mode-number">Toroidal mode number</label>
+      </div>
+      <div>
+        <input type="hidden" name="--output-path" value="/continuum" />
+        <input type="submit" value="Start!"/>
+      </div>
+    </form>
     <div class="emscripten_border">
       <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1 width=1200 height=400></canvas>
     </div>
@@ -143,20 +179,30 @@
         };
       };
 
-      const gfile_input = document.getElementById("gfile");
-      gfile_input.addEventListener("change", (e) => {
-        if(gfile_input.files.length == 0) {
-          console.log("Select a g-file!");
-          return;
+      let gfile_filename;
+      const input_form = document.getElementById("input");
+      input_form.addEventListener("submit", function(e){
+        e.preventDefault();
+        const form_data = new FormData(e.target);
+
+        form_data.set(form_data.get("omega-limit-type"),
+          form_data.get("max-omega"));
+        form_data.delete("omega-limit-type");
+        form_data.delete("max-omega");
+
+        const gfile = form_data.get("gfile");
+        form_data.delete("gfile");
+        const args = ['/gfile'];
+        for(const [name, value] of form_data.entries()) {
+            args.push(name, value);
         }
 
-        const gfile = gfile_input.files.item(0);
+        gfile_filename = gfile.name;
         gfile.arrayBuffer().then(ab => {
-          FS.writeFile("/gfile", new Uint8Array(ab));
-          Module.callMain(["/gfile", "-m", "3", "-n", "8", "-o", "/continuum"]);
-        }).catch(err => { console.log(err); });
+           FS.writeFile("/gfile", new Uint8Array(ab));
+           Module.callMain(args);
+         }).catch(err => { console.log(err); });
       })
-      gfile_input.disabled = false;
 
       const download = document.getElementById("download");
       download.addEventListener("click", (e) => {
@@ -166,7 +212,7 @@
         const link = document.createElement("a");
         const blob = new Blob([lines], { type: "text/plain" });
         link.href = URL.createObjectURL(blob);
-        link.download = `continuum`;
+        link.download = `continuum-${gfile_filename}`;
         link.style.display = 'none';
 
         document.body.appendChild(link);
