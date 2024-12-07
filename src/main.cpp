@@ -112,8 +112,8 @@ auto calculate_continuum(const auto& equilibrium) {
     const auto q0 = equilibrium.safety_factor(0);
 
     // poloidal mode numbers
-    std::vector<std::vector<std::pair<int, int>>> m_ranges;
-    std::vector<std::vector<double>> continuum;
+    std::vector<int> m_ranges;
+    std::vector<double> continuum;
 
     const auto& ns = get_state().ns;
     const auto n_max = *std::max_element(ns.begin(), ns.end());
@@ -295,9 +295,6 @@ auto calculate_continuum(const auto& equilibrium) {
         }
         floquet_exponent_sample_pts += local_omega_nu.size();
 
-        m_ranges.emplace_back();
-        continuum.emplace_back();
-
         // calculate omega for each pair of mode numbers (n, m)
         // change normalization of omega to v_{A,0}/R_0 here
         const auto local_max_nu = local_omega_nu.back().second.real();
@@ -306,7 +303,8 @@ auto calculate_continuum(const auto& equilibrium) {
             std::size_t m_num = 0;
             const int m_lower = std::ceil(n * local_q - local_max_nu);
             const int m_upper = std::floor(n * local_q + local_max_nu);
-            m_ranges.back().emplace_back(m_lower, m_upper);
+            m_ranges.push_back(m_lower);
+            m_ranges.push_back(m_upper);
 
             for (int m = m_lower; m <= m_upper; ++m) {
                 const double kp = n * local_q - m;
@@ -325,11 +323,11 @@ auto calculate_continuum(const auto& equilibrium) {
                                           });
                 }
                 if (it == local_omega_nu.begin()) {
-                    continuum.back().push_back(0.);
+                    continuum.push_back(0.);
                 } else if (it != local_omega_nu.end()) {
                     const auto [omega0, nu0] = *(it - 1);
                     const auto [omega1, nu1] = *it;
-                    continuum.back().push_back(
+                    continuum.push_back(
                         (omega0 + (std::abs(kp) - nu0.real()) /
                                       (nu1.real() - nu0.real()) *
                                       (omega1 - omega0)) /
@@ -340,23 +338,6 @@ auto calculate_continuum(const auto& equilibrium) {
         psi_sample_pts.push_back(psi);
 
 #ifdef __EMSCRIPTEN__
-        double w0 = continuum.back()[0];
-        double w1 = continuum.back()[1];
-        double w2 = continuum.back()[2];
-
-        // bubble sort
-        if (w0 > w1) { std::swap(w0, w1); }
-        if (w1 > w2) { std::swap(w1, w2); }
-        if (w0 > w1) { std::swap(w0, w1); }
-
-        auto& pts = get_state().pts;
-        auto& pt_num = get_state().pt_num;
-
-        pts[4 * pt_num] = equilibrium.minor_radius(psi);
-        pts[4 * pt_num + 1] = w0;
-        pts[4 * pt_num + 2] = w1;
-        pts[4 * pt_num + 3] = w2;
-
         ++pt_num;
 #endif
     }
@@ -387,38 +368,21 @@ auto sort_points_into_lines(const auto& equilibrium,
         lines;
     const bool sort_by_m = false;
     const auto& ns = get_state().ns;
-    if (sort_by_m) {
-        // To be deprecated
-        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
-            auto psi = psi_sample_pts[i];
-            std::size_t offset = 0;
-            for (std::size_t j = 0; j < ns.size(); ++j) {
-                auto [m_lower, m_upper] = m_ranges[i][j];
-                for (int k = 0; k <= m_upper - m_lower; ++k) {
-                    lines[std::make_pair(ns[j], k + m_lower)].push_back(
-                        {equilibrium.minor_radius(psi),
-                         continuum[i][k + offset]});
-                }
-                offset += m_upper - m_lower + 1;
-            }
-        }
-    } else {
-        // sort by Floquet exponent
-        for (std::size_t i = 0; i < psi_sample_pts.size(); ++i) {
-            auto psi = psi_sample_pts[i];
-            std::size_t offset = 0;
-            for (std::size_t j = 0; j < ns.size(); ++j) {
-                auto [m_lower, m_upper] = m_ranges[i][j];
-                for (int k = 0; k <= m_upper - m_lower; ++k) {
-                    const int kp = std::floor(std::abs(
-                        .5 +
-                        std::floor(2 * (ns[j] * equilibrium.safety_factor(psi) -
-                                        (k + m_lower)))));
-                    lines[std::make_pair(ns[j], kp)].push_back(
-                        {equilibrium.minor_radius(psi),
-                         continuum[i][k + offset]});
-                }
-                offset += m_upper - m_lower + 1;
+    // sort by Floquet exponent
+    for (std::size_t i = 0, continuum_idx = 0, m_idx = 0;
+         i < psi_sample_pts.size(); ++i) {
+        const auto psi = psi_sample_pts[i];
+        for (std::size_t j = 0; j < ns.size(); ++j) {
+            auto m_lower = m_ranges[m_idx++];
+            auto m_upper = m_ranges[m_idx++];
+            for (int k = 0; k <= m_upper - m_lower; ++k) {
+                const int kp = std::floor(std::abs(
+                    .5 +
+                    std::floor(2 * (ns[j] * equilibrium.safety_factor(psi) -
+                                    (k + m_lower)))));
+                lines[std::make_pair(ns[j], sort_by_m ? k + m_lower : kp)]
+                    .push_back({equilibrium.minor_radius(psi),
+                                continuum[continuum_idx++]});
             }
         }
     }
