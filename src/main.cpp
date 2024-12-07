@@ -19,7 +19,6 @@
 #include <emscripten/console.h>  // emscripten_out
 #include <emscripten/wasm_worker.h>
 
-// TODO: Add input logic
 // TODO: More flexible preview drawing
 #endif
 
@@ -186,7 +185,7 @@ auto calculate_continuum(const auto& equilibrium) {
             // imaginary part not less than 0
             return std::log(flo_mat.eigenvalue()) / (2.i * std::numbers::pi);
         };
-        // TODO: change to vector
+
         std::map<double, std::complex<double>> omega_nu_map;
         std::stack<std::pair<decltype(omega_nu_map)::iterator,
                              decltype(omega_nu_map)::iterator>>
@@ -490,9 +489,7 @@ void draw_pts() {
 
     if (current_idx > last_idx) {
         for (int i = last_idx; i < current_idx; ++i) {
-            EM_ASM(
-                { draw_point($0, $1, $2, $3); }, pts[4 * i], pts[4 * i + 1],
-                pts[4 * i + 2], pts[4 * i + 3]);
+            EM_ASM({ draw_point($0, $1); }, pts + 4 * i, 4);
         }
     }
     last_idx = current_idx;

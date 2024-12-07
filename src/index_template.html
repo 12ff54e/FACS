@@ -228,7 +228,14 @@
       ctx.fillStyle = "white";
       ctx.fillRect(0, 0, w, h);
 
-      function draw_point(r, w1, w2, w3) {
+      function draw_point(ptr, len) {
+        const f64_offset = ptr / Float64Array.BYTES_PER_ELEMENT;
+        const data = Module.HEAPF64.subarray(f64_offset, f64_offset + len);
+        const r = data[0];
+        const w1 = data[1];
+        const w2 = data[2];
+        const w3 = data[3];
+
         ctx.fillStyle = "red";
         ctx.beginPath();
         ctx.ellipse(r*w, (1.-w1/1.5)*h, 3, 3, 0, 0, 2*Math.PI);
