@@ -223,33 +223,45 @@
       const canvas = document.getElementById("canvas");
       const ctx = canvas.getContext("2d");
 
-      const w = canvas.width;
-      const h = canvas.height;
+      const width = canvas.width;
+      const height = canvas.height;
       ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, w, h);
+      ctx.fillRect(0, 0, width, height);
 
-      function draw_point(ptr, len) {
-        const f64_offset = ptr / Float64Array.BYTES_PER_ELEMENT;
-        const data = Module.HEAPF64.subarray(f64_offset, f64_offset + len);
-        const r = data[0];
-        const w1 = data[1];
-        const w2 = data[2];
-        const w3 = data[3];
+      function draw_point(r, m_ptr, m_len, w_ptr) {
+        const color_list = [
+          'rgb(93,129,180)',
+          'rgb(224,155,36)',
+          'rgb(142,176,49)',
+          'rgb(235,98,53)',
+          'rgb(134,120,178)',
+          'rgb(196,110,26)',
+          'rgb(92,157,199)',
+          'rgb(255,191,0)'];
 
-        ctx.fillStyle = "red";
-        ctx.beginPath();
-        ctx.ellipse(r*w, (1.-w1/1.5)*h, 3, 3, 0, 0, 2*Math.PI);
-        ctx.fill();
+        const offset_32 = m_ptr / Int32Array.BYTES_PER_ELEMENT;
+        const m_ranges = Module.HEAP32.subarray(offset_32, offset_32 + m_len);
+        const data = Module.HEAPF64.subarray(w_ptr / Float64Array.BYTES_PER_ELEMENT);
+        const ws = [];
 
-        ctx.fillStyle = "blue";
-        ctx.beginPath();
-        ctx.ellipse(r*w, (1.-w2/1.5)*h, 3, 3, 0, 0, 2*Math.PI);
-        ctx.fill();
-
-        ctx.fillStyle = "green";
-        ctx.beginPath();
-        ctx.ellipse(r*w, (1.-w3/1.5)*h, 3, 3, 0, 0, 2*Math.PI);
-        ctx.fill();
+        let local_offset = 0;
+        let color_idx = 0;
+        // iterate toroidal mode number
+        for(let i = 0; i < m_ranges.length / 2; ++i) {
+            // iterate poloidal mode number
+            const ws = []; // ws store omega of one toroidal number
+            for(let j = 0; j <= m_ranges[2*i+1] - m_ranges[2*i]; ++j) {
+                ws.push(data[local_offset++]);
+            }
+            ws.sort();
+            for(const w of ws) {
+              ctx.fillStyle = color_list[color_idx++ % color_list.length];
+              ctx.beginPath();
+              ctx.ellipse(r * width, (1 - w / 1.5) * height, 3, 3, 0, 0, 2 * Math.PI);
+              ctx.fill();
+            }
+        }
+        return local_offset;
       }
 
       function enable_download() {

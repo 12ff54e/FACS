@@ -1,5 +1,6 @@
-#include <algorithm>   // lower_bound, upper_bound, max_element
-#include <cmath>       // ceil, floor
+#include <algorithm>  // lower_bound, upper_bound, max_element
+#include <cmath>      // ceil, floor
+#include <cstdint>
 #include <cstdlib>     // exit
 #include <filesystem>  // path
 #include <iostream>
@@ -19,6 +20,8 @@
 #include <emscripten/console.h>  // emscripten_out
 #include <emscripten/wasm_worker.h>
 
+// lock for m_ranges and continuum vector
+emscripten_lock_t lock = EMSCRIPTEN_LOCK_T_STATIC_INITIALIZER;
 // TODO: More flexible preview drawing
 #endif
 
@@ -58,9 +61,10 @@ struct State {
     bool stats_printed;
 
     // for real time preview
-    int drawn_index;
-    int pt_num;
-    double pts[4000];
+    int last_radial_idx;
+    int current_radial_idx;
+    int total_offset;
+    std::vector<double> r_sample_pts;
 
     // worker state
     emscripten_wasm_worker_t worker_id;
@@ -69,6 +73,11 @@ struct State {
     Input input;
     std::string gfile_content;
     std::vector<int> ns;
+
+    // intermediates
+    std::vector<double> psi_sample_pts;
+    std::vector<int32_t> m_ranges;
+    std::vector<double> continuum;
 
     // result
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
@@ -83,7 +92,7 @@ auto& get_state() {
 // Zero criteria for float point numbers
 constexpr double EPSILON = 1.e-6;
 
-auto calculate_continuum(const auto& equilibrium) {
+void calculate_continuum(const auto& equilibrium) {
     const auto omega_limit_by_value = get_state().input.omega_limit_by_value();
     const auto max_continuum_zone = get_state().input.max_continuum_zone;
 
@@ -111,16 +120,15 @@ auto calculate_continuum(const auto& equilibrium) {
 
     const auto q0 = equilibrium.safety_factor(0);
 
-    // poloidal mode numbers
-    std::vector<int> m_ranges;
-    std::vector<double> continuum;
+    auto& m_ranges = get_state().m_ranges;
+    auto& continuum = get_state().continuum;
+    auto& psi_sample_pts = get_state().psi_sample_pts;
 
     const auto& ns = get_state().ns;
     const auto n_max = *std::max_element(ns.begin(), ns.end());
     constexpr int pt_per_radial_period = 15;
 
     std::size_t floquet_exponent_sample_pts = 0;
-    std::vector<double> psi_sample_pts;
     auto zone_iter = q_local_extrema_pos.begin();
     auto psi_left = psi_min;
     auto psi_right =
@@ -298,6 +306,12 @@ auto calculate_continuum(const auto& equilibrium) {
         // calculate omega for each pair of mode numbers (n, m)
         // change normalization of omega to v_{A,0}/R_0 here
         const auto local_max_nu = local_omega_nu.back().second.real();
+
+#ifdef __EMSCRIPTEN__
+        // This lock is necessary since vector might be moved (through memmove
+        // syscall) when growing
+        emscripten_lock_waitinf_acquire(&lock);
+#endif
         for (std::size_t n_idx = 0; n_idx < ns.size(); ++n_idx) {
             auto n = ns[n_idx];
             std::size_t m_num = 0;
@@ -335,11 +349,12 @@ auto calculate_continuum(const auto& equilibrium) {
                 }
             }
         }
-        psi_sample_pts.push_back(psi);
-
 #ifdef __EMSCRIPTEN__
-        ++pt_num;
+        emscripten_lock_release(&lock);
+        ++get_state().current_radial_idx;
+        get_state().r_sample_pts.push_back(equilibrium.minor_radius(psi));
 #endif
+        psi_sample_pts.push_back(psi);
     }
     {
         std::ostringstream oss;
@@ -354,20 +369,16 @@ auto calculate_continuum(const auto& equilibrium) {
         std::cout << oss.str();
 #endif
     }
-
-    // hopefully NRVO works
-    return std::make_tuple(m_ranges, psi_sample_pts, continuum);
 }
 
-auto sort_points_into_lines(const auto& equilibrium,
-                            const auto& m_ranges,
-                            const auto& psi_sample_pts,
-                            const auto& continuum) {
+auto sort_points_into_lines(const auto& equilibrium) {
     // sort by (n,m) or (n, \nu) to individual lines
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
         lines;
     const bool sort_by_m = false;
     const auto& ns = get_state().ns;
+    const auto& psi_sample_pts = get_state().psi_sample_pts;
+    const auto& m_ranges = get_state().m_ranges;
     // sort by Floquet exponent
     for (std::size_t i = 0, continuum_idx = 0, m_idx = 0;
          i < psi_sample_pts.size(); ++i) {
@@ -382,7 +393,7 @@ auto sort_points_into_lines(const auto& equilibrium,
                                     (k + m_lower)))));
                 lines[std::make_pair(ns[j], sort_by_m ? k + m_lower : kp)]
                     .push_back({equilibrium.minor_radius(psi),
-                                continuum[continuum_idx++]});
+                                get_state().continuum[continuum_idx++]});
             }
         }
     }
@@ -408,14 +419,12 @@ void gfile_to_continuum_lines() {
 
     timer.pause();
 
-    const auto [m_ranges, psi_sample_pts, continuum] =
-        calculate_continuum(equilibrium);
+    calculate_continuum(equilibrium);
 
     timer.pause_last_and_start_next("Sort points into lines");
 
     // sort by (n,m) or (n, \nu) to individual lines
-    get_state().lines = sort_points_into_lines(equilibrium, m_ranges,
-                                               psi_sample_pts, continuum);
+    get_state().lines = sort_points_into_lines(equilibrium);
     timer.pause();
 };
 
@@ -447,16 +456,24 @@ void output() {
 char worker_stack[8192];
 
 void draw_pts() {
-    const auto current_idx = get_state().pt_num;
-    auto& last_idx = get_state().drawn_index;
-    const auto& pts = get_state().pts;
+    const auto current_radial_idx = get_state().current_radial_idx;
+    auto& last_radial_idx = get_state().last_radial_idx;
+    const auto& continuum = get_state().continuum;
+    const auto& m_ranges = get_state().m_ranges;
+    const auto n_size = get_state().ns.size();
 
-    if (current_idx > last_idx) {
-        for (int i = last_idx; i < current_idx; ++i) {
-            EM_ASM({ draw_point($0, $1); }, pts + 4 * i, 4);
+    if (current_radial_idx > last_radial_idx) {
+        emscripten_lock_busyspin_waitinf_acquire(&lock);
+        auto& total_offset = get_state().total_offset;
+        for (int i = last_radial_idx; i < current_radial_idx; ++i) {
+            total_offset += EM_ASM_INT(
+                { return draw_point($0, $1, $2, $3); },
+                get_state().r_sample_pts[i], m_ranges.data() + 2 * i * n_size,
+                2 * n_size, continuum.data() + total_offset);
         }
+        emscripten_lock_release(&lock);
     }
-    last_idx = current_idx;
+    last_radial_idx = current_radial_idx;
     if (get_state().finish_calculation && !get_state().stats_printed) {
         output();
         get_state().stats_printed = true;
