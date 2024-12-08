@@ -55,13 +55,26 @@ struct NumericEquilibrium : Spdata<T> {
     // necessary
 
     auto radial_func(value_type psi, value_type theta) const {
+        const auto [psi_min, _] = psi_range();
+        if (psi < psi_min) {
+            return util::lerp(0., -intp_data().intp_2d[4](psi_min, theta),
+                              psi / psi_min);
+        }
         return -intp_data().intp_2d[4](psi, theta);
     }
 
     auto j_func(value_type psi, value_type theta) const {
-        const auto j = intp_data().intp_2d[3](psi, theta);
-        const auto q = intp_data().intp_1d[0](psi);
-        return std::pow(j / q, 2);
+        const auto& j = intp_data().intp_2d[3];
+        const auto& q = intp_data().intp_1d[0];
+        const auto [psi_min, _] = psi_range();
+        if (psi < psi_min) {
+            return util::lerp(std::pow(this->spdata_raw_.axis_value_2d[3] /
+                                           this->spdata_raw_.axis_value_1d[0],
+                                       2),
+                              std::pow(j(psi_min, theta) / q(psi_min), 2),
+                              psi / psi_min);
+        }
+        return std::pow(j(psi, theta) / q(psi), 2);
     }
 
     auto safety_factor(value_type psi) const {

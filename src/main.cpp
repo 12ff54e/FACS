@@ -1,9 +1,10 @@
-#include <algorithm>  // lower_bound, upper_bound, max_element
-#include <cmath>      // ceil, floor
-#include <cstdint>
+#include <algorithm>   // lower_bound, upper_bound, max_element
+#include <cmath>       // ceil, floor
+#include <cstdint>     // int32_t
 #include <cstdlib>     // exit
 #include <filesystem>  // path
 #include <iostream>
+#include <limits>  // infinity
 #include <map>
 #include <numbers>  // pi
 #include <sstream>
@@ -93,20 +94,23 @@ auto& get_state() {
 constexpr double EPSILON = 1.e-6;
 
 void calculate_continuum(const auto& equilibrium) {
-    const auto omega_limit_by_value = get_state().input.omega_limit_by_value();
-    const auto max_continuum_zone = get_state().input.max_continuum_zone;
-
     using namespace std::complex_literals;
     auto& timer = Timer::get_timer();
 
     const auto [psi_min, psi_max] = equilibrium.psi_range();
     const std::size_t radial_count = equilibrium.radial_grid_num();
 
-    // position of local minimum of q
+    // position of local extrema of q
     std::vector<double> q_local_extrema_pos;
     const auto delta_psi = (psi_max - psi_min) / radial_count;
+    double q_min_psi;
+    double q_min = std::numeric_limits<double>::infinity();
     for (double psi = psi_min; psi < psi_max; psi += delta_psi) {
         auto q = equilibrium.safety_factor(psi);
+        if (q_min > q) {
+            q_min = q;
+            q_min_psi = psi;
+        }
         if ((q - equilibrium.safety_factor(psi - delta_psi)) *
                 (q - equilibrium.safety_factor(psi + delta_psi)) >
             0) {
@@ -130,7 +134,7 @@ void calculate_continuum(const auto& equilibrium) {
 
     std::size_t floquet_exponent_sample_pts = 0;
     auto zone_iter = q_local_extrema_pos.begin();
-    auto psi_left = psi_min;
+    auto psi_left = decltype(psi_min){};
     auto psi_right =
         zone_iter == q_local_extrema_pos.end()
             ? psi_max
@@ -170,11 +174,12 @@ void calculate_continuum(const auto& equilibrium) {
                             psi_left, psi_right),
                         psi_0 + max_delta_psi);
     };
-    for (double psi = psi_min; psi < psi_max;
-         psi = get_next_psi(psi, 1. / (n_max * pt_per_radial_period))) {
-        timer.pause_last_and_start_next("Calculate Floquet exponent");
 
+    auto calculate_local_floquet_func = [&equilibrium, q0](auto psi) {
         const auto local_q = equilibrium.safety_factor(psi);
+        const auto max_continuum_zone = get_state().input.max_continuum_zone;
+        const auto omega_limit_by_value =
+            get_state().input.omega_limit_by_value();
 
         // convert between global and local normalization of $\omega$
         const auto max_local_omega =
@@ -235,9 +240,9 @@ void calculate_continuum(const auto& equilibrium) {
                 const auto it =
                     omega_nu_map.emplace_hint(pt1, omega_mid, nu_actual);
                 constexpr double min_domega = 1.e-3;
-                // NOTE: I don not care about imaginary part of \nu, so points
-                // in gap zone will be sparse. Extra subdivisions are done at
-                // gap-continuum boundary.
+                // NOTE: I don not care about imaginary part of \nu, so
+                // points in gap zone will be sparse. Extra subdivisions are
+                // done at gap-continuum boundary.
                 if ((std::abs(.5 * (nu_0 + nu_1) - nu_actual.real()) >
                          subdivision_err ||
                      (nu_0 < EPSILON != nu_1 < EPSILON) ||
@@ -255,10 +260,10 @@ void calculate_continuum(const auto& equilibrium) {
             // adjust $\Re\nu$ according to stability region
             for (auto it = region_begin; it != region_end; ++it) {
                 auto nu = it->second;
-                // normally $\Re\nu$ growth monotonic with $\omega$, but it goes
-                // unchanged inside coutinuum gap, a small margin is added to
-                // avoid misclassifying gap region as another stability
-                // region
+                // normally $\Re\nu$ growth monotonic with $\omega$, but it
+                // goes unchanged inside coutinuum gap, a small margin is
+                // added to avoid misclassifying gap region as another
+                // stability region
                 if (increasing && nu.real() - last_real + EPSILON < 0. &&
                     last_real > .4) {
                     // e^{i\nu T} entering lower half plane
@@ -289,6 +294,25 @@ void calculate_continuum(const auto& equilibrium) {
             }
         }
 
+        return local_omega_nu;
+    };
+
+#ifdef __EMSCRIPTEN__
+    // estimate max omega, and inform js for preview purpose
+    auto omega_nu = calculate_local_floquet_func(q_min_psi);
+    emscripten_wasm_worker_post_function_vd(
+        EMSCRIPTEN_WASM_WORKER_ID_PARENT,
+        [](double omega) { EM_ASM({ set_max_omega($0); }, omega); },
+        omega_nu.back().first);
+#endif
+
+    // TODO: Equilibrium value near magnetic axis is calculated by linear
+    // interpolation, which might be awfully inaccurate. Consider using Miller
+    // model to approximate equlibrium
+    for (double psi = 0; psi < psi_max;
+         psi = get_next_psi(psi, 1. / (n_max * pt_per_radial_period))) {
+        timer.pause_last_and_start_next("Calculate Floquet exponent");
+        auto local_omega_nu = calculate_local_floquet_func(psi);
         timer.pause_last_and_start_next("Solve for omega");
         {
             std::ostringstream oss;
@@ -312,6 +336,7 @@ void calculate_continuum(const auto& equilibrium) {
         // syscall) when growing
         emscripten_lock_waitinf_acquire(&lock);
 #endif
+        const auto local_q = equilibrium.safety_factor(psi);
         for (std::size_t n_idx = 0; n_idx < ns.size(); ++n_idx) {
             auto n = ns[n_idx];
             std::size_t m_num = 0;
@@ -512,7 +537,7 @@ int main(int argc, char** argv) {
     CLAP_END(Input)
 
     auto& input = get_state().input;
-    input.radial_grid_num = 512;
+    input.radial_grid_num = 1024;
 
     try {
         CLAP<Input>::parse_input(input, argc, argv);

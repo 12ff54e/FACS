@@ -180,6 +180,7 @@
       };
 
       let gfile_filename;
+      let max_omega;
       const input_form = document.getElementById("input");
       input_form.addEventListener("submit", function(e){
         e.preventDefault();
@@ -257,7 +258,7 @@
             for(const w of ws) {
               ctx.fillStyle = color_list[color_idx++ % color_list.length];
               ctx.beginPath();
-              ctx.ellipse(r * width, (1 - w / 1.5) * height, 3, 3, 0, 0, 2 * Math.PI);
+              ctx.ellipse(r * width, (1 - w / max_omega) * height, 3, 3, 0, 0, 2 * Math.PI);
               ctx.fill();
             }
         }
@@ -268,6 +269,9 @@
         download.disabled = false;
       }
 
+      function set_max_omega(w) {
+        max_omega = w;
+      }
 
     </script>
     {{{ SCRIPT }}}
