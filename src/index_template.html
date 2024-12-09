@@ -179,11 +179,26 @@
         };
       };
 
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, width, height);
+
       let gfile_filename;
       let max_omega;
       const input_form = document.getElementById("input");
+      const download = document.getElementById("download");
+
       input_form.addEventListener("submit", function(e){
         e.preventDefault();
+
+        download.disabled = true;
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, width, height);
+
         const form_data = new FormData(e.target);
 
         form_data.set(form_data.get("omega-limit-type"),
@@ -200,12 +215,11 @@
 
         gfile_filename = gfile.name;
         gfile.arrayBuffer().then(ab => {
-           FS.writeFile("/gfile", new Uint8Array(ab));
-           Module.callMain(args);
+          FS.writeFile("/gfile", new Uint8Array(ab));
+          Module.callMain(args);
          }).catch(err => { console.log(err); });
       })
 
-      const download = document.getElementById("download");
       download.addEventListener("click", (e) => {
         e.preventDefault();
         const lines = FS.readFile("/continuum", { encoding: "utf8" });
@@ -220,14 +234,6 @@
         link.click();
         document.body.removeChild(link);
       });
-
-      const canvas = document.getElementById("canvas");
-      const ctx = canvas.getContext("2d");
-
-      const width = canvas.width;
-      const height = canvas.height;
-      ctx.fillStyle = "white";
-      ctx.fillRect(0, 0, width, height);
 
       function draw_point(r, m_ptr, m_len, w_ptr) {
         const color_list = [

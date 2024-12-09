@@ -329,7 +329,7 @@ struct CLAP {
 #define CLAP_BEGIN(NAME)                        \
     struct _clap_##NAME##_ : NAME, CLAP<NAME> { \
         using base = NAME;                      \
-        static void define_parameters() {
+        static int define_parameters() {
 #define CLAP_END(NAME)                                                 \
     {                                                                  \
         auto result = get_options().emplace(                           \
@@ -340,11 +340,12 @@ struct CLAP {
             result.first->second.short_name = "-h";                    \
         }                                                              \
     }                                                                  \
+    return 0;                                                          \
     }                                                                  \
     }                                                                  \
     ;                                                                  \
     try {                                                              \
-        _clap_##NAME##_::define_parameters();                          \
+        static auto _ = _clap_##NAME##_::define_parameters();          \
     } catch (std::exception & e) {                                     \
         std::cerr << e.what();                                         \
         return EINVAL;                                                 \

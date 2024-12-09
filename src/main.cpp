@@ -504,11 +504,34 @@ void draw_pts() {
         get_state().stats_printed = true;
 
         EM_ASM({ enable_download(); });
+
+        emscripten_terminate_wasm_worker(get_state().worker_id);
     }
 }
 #endif
 
 int main(int argc, char** argv) {
+#ifdef __EMSCRIPTEN__
+    // clear state since main might be called multiple times
+    get_state().finish_calculation = false;
+    get_state().stats_printed = false;
+
+    get_state().last_radial_idx = 0;
+    get_state().current_radial_idx = 0;
+    get_state().total_offset = 0;
+    get_state().r_sample_pts.clear();
+
+    get_state().input = {};
+    get_state().ns.clear();
+    get_state().psi_sample_pts.clear();
+    get_state().m_ranges.clear();
+    get_state().continuum.clear();
+
+    get_state().lines.clear();
+
+    Timer::get_timer().reset();
+#endif
+
     CLAP_BEGIN(Input)
     CLAP_ADD_USAGE("[OPTION]... INPUT_FILE")
     CLAP_ADD_DESCRIPTION(
