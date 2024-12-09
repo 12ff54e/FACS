@@ -122,8 +122,6 @@ void calculate_continuum(const auto& equilibrium) {
         exit(1);
     }
 
-    const auto q0 = equilibrium.safety_factor(0);
-
     auto& m_ranges = get_state().m_ranges;
     auto& continuum = get_state().continuum;
     auto& psi_sample_pts = get_state().psi_sample_pts;
@@ -175,7 +173,7 @@ void calculate_continuum(const auto& equilibrium) {
                         psi_0 + max_delta_psi);
     };
 
-    auto calculate_local_floquet_func = [&equilibrium, q0](auto psi) {
+    auto calculate_local_floquet_func = [&equilibrium](auto psi) {
         const auto local_q = equilibrium.safety_factor(psi);
         const auto max_continuum_zone = get_state().input.max_continuum_zone;
         const auto omega_limit_by_value =
@@ -183,7 +181,7 @@ void calculate_continuum(const auto& equilibrium) {
 
         // convert between global and local normalization of $\omega$
         const auto max_local_omega =
-            local_q / q0 * get_state().input.max_omega_value;
+            local_q * get_state().input.max_omega_value;
         auto calc_floquet_exp = [psi, &equilibrium](auto omega) {
             const auto omega2 = omega * omega;
             const auto potential = [omega2, psi,
@@ -193,7 +191,7 @@ void calculate_continuum(const auto& equilibrium) {
             };
             const FloquetMatrix flo_mat(
                 potential, std::numbers::pi * 2,
-                static_cast<std::size_t>(100 * std::sqrt(omega2) * 2) + 100);
+                static_cast<std::size_t>(100 * omega * 2) + 100);
             // FloquetMatrix::eigenvalue always returns eigenvalue with
             // imaginary part not less than 0
             return std::log(flo_mat.eigenvalue()) / (2.i * std::numbers::pi);
@@ -298,12 +296,14 @@ void calculate_continuum(const auto& equilibrium) {
     };
 
 #ifdef __EMSCRIPTEN__
-    // estimate max omega, and inform js for preview purpose
-    auto omega_nu = calculate_local_floquet_func(q_min_psi);
-    emscripten_wasm_worker_post_function_vd(
-        EMSCRIPTEN_WASM_WORKER_ID_PARENT,
-        [](double omega) { EM_ASM({ set_max_omega($0); }, omega); },
-        omega_nu.back().first);
+    if (!get_state().input.omega_limit_by_value()) {
+        // estimate max omega, and inform js for preview purpose
+        auto omega_nu = calculate_local_floquet_func(q_min_psi);
+        emscripten_wasm_worker_post_function_vd(
+            EMSCRIPTEN_WASM_WORKER_ID_PARENT,
+            [](double omega) { EM_ASM({ set_max_omega($0); }, omega); },
+            omega_nu.back().first / q_min);
+    }
 #endif
 
     // TODO: Equilibrium value near magnetic axis is calculated by linear
@@ -612,6 +612,9 @@ int main(int argc, char** argv) {
     emscripten_wasm_worker_post_function_v(wasm_worker,
                                            gfile_to_continuum_lines);
 
+    if (input.omega_limit_by_value()) {
+        EM_ASM({set_max_omega($0)}, input.max_omega_value);
+    }
     emscripten_set_main_loop(draw_pts, 0, false);
 #else  // perform calculation in main thread
     gfile_to_continuum_lines();
