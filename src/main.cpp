@@ -18,18 +18,18 @@
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
-#include <emscripten/console.h>  // emscripten_out
+#include <emscripten/console.h>  // emscripten_console_log
 #include <emscripten/wasm_worker.h>
 
 // lock for m_ranges and continuum vector
 emscripten_lock_t lock = EMSCRIPTEN_LOCK_T_STATIC_INITIALIZER;
-// TODO: More flexible preview drawing
+// TODO: Add axis in preview
 #endif
 
 #define ZQ_TIMER_IMPLEMENTATION
 #include "timer.h"
 
-constexpr double psi_ratio = 0.98;
+constexpr double psi_ratio = 1.;
 constexpr std::size_t poloidal_sample_point = 256;
 
 // inject hash function for pair of int
@@ -320,7 +320,7 @@ void calculate_continuum(const auto& equilibrium) {
                 << psi / psi_max
                 << ", omega sample pt = " << local_omega_nu.size() << '\n';
 #ifdef __EMSCRIPTEN__
-            emscripten_out(oss.str().c_str());
+            emscripten_console_log(oss.str().c_str());
 #else
             std::cout << oss.str();
 #endif
@@ -389,7 +389,7 @@ void calculate_continuum(const auto& equilibrium) {
             << floquet_exponent_sample_pts << " (r, omega) points.\n";
 #ifdef __EMSCRIPTEN__
         get_state().finish_calculation = true;  // mark finish
-        emscripten_out(oss.str().c_str());
+        emscripten_console_log(oss.str().c_str());
 #else
         std::cout << oss.str();
 #endif
@@ -475,7 +475,7 @@ void output() {
 
     timer.pause();
     timer.print();
-};
+}
 
 #ifdef __EMSCRIPTEN__
 char worker_stack[8192];

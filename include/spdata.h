@@ -4,6 +4,11 @@
 #include <iomanip>
 #include <limits>
 #include <ostream>
+#include <sstream>
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten/console.h>
+#endif
 
 #include "contour.h"
 #include "gFileRawData.h"
@@ -110,7 +115,7 @@ class Spdata {
    protected:
     const bool use_si_;
     const std::size_t lsp_, lst_;
-    const value_type psi_delta_;
+    value_type psi_delta_;
     const value_type theta_delta_;
     const SpdataRaw_ spdata_raw_;
     const SpdataIntp_ spdata_intp_;
@@ -126,9 +131,43 @@ class Spdata {
                 std::make_pair(g_file_data.z_mid - .5 * g_file_data.dim.y(),
                                g_file_data.z_mid + .5 * g_file_data.dim.y()));
 
-        const value_type psi_bd =
-            g_file_data.flux_LCFS - g_file_data.flux_magnetic_axis;
+        // check poloidal flux value at magnetic axis
+        const auto psi_ma_intp = flux_function(g_file_data.magnetic_axis);
+        if (std::abs((psi_ma_intp - g_file_data.flux_magnetic_axis) /
+                     (g_file_data.flux_LCFS - g_file_data.flux_magnetic_axis)) >
+            1.e-4) {
+            std::ostringstream oss;
+            oss << "The poloidal flux of magnetic axis given in gfile "
+                   "deviates from interpolated value.\n"
+                << "  \\psi_p in gfile: " << g_file_data.flux_magnetic_axis
+                << "\n  \\psi_p from interpolation: " << psi_ma_intp << '\n';
+#ifdef __EMSCRIPTEN__
+            emscripten_console_log(oss.str().c_str());
+#else
+            std::cout << oss.str();
+#endif
+        }
+
+        value_type flux_boundary_min = 10. * std::pow(g_file_data.r_center, 2) *
+                                       std::abs(g_file_data.b_center);
+        for (const auto& pt : g_file_data.boundary) {
+            flux_boundary_min = std::min(flux_boundary_min, flux_function(pt));
+        }
+        {
+            std::ostringstream oss;
+            oss << "The poloidal flux of last closed flux surface is "
+                << g_file_data.flux_LCFS << '\n'
+                << "Minimum of interpolated value at boundary points is "
+                << flux_boundary_min << '\n';
+#ifdef __EMSCRIPTEN__
+            emscripten_console_log(oss.str().c_str());
+#else
+            std::cout << oss.str();
+#endif
+        }
+        const value_type psi_bd = flux_boundary_min - psi_ma_intp;
         const value_type psi_wall = psi_ratio * psi_bd;
+        psi_delta_ = psi_wall / static_cast<value_type>(lsp_ - 1);
 
         // contours are from \\Delta\\psi to LCFS
         std::vector<Contour<value_type>> contours;
@@ -138,7 +177,7 @@ class Spdata {
                 util::lerp(psi_delta_, psi_wall,
                            static_cast<value_type>(i) /
                                static_cast<value_type>(radial_sample - 1)) +
-                    g_file_data.flux_magnetic_axis,
+                    psi_ma_intp,
                 flux_function, g_file_data);
         }
 
@@ -274,8 +313,7 @@ class Spdata {
     X(gp_rt);
 
         for (std::size_t ri = 0; ri < contours.size(); ++ri) {
-            const value_type psi =
-                contours[ri].flux() - g_file_data.flux_magnetic_axis;
+            const value_type psi = contours[ri].flux() - psi_ma_intp;
             const std::size_t poloidal_size = contours[ri].size() + 1;
 #define X(name)                         \
     std::vector<value_type> name##_geo; \
@@ -391,14 +429,13 @@ class Spdata {
             safety_factor.push_back(safety_factor_intp(psi));
             pol_current_n.push_back(poloidal_current_intp(psi) / current_unit);
             pressure_n.push_back(pressure_intp(psi) / pressure_unit);
-            tor_flux_n.push_back((ri == 0 ? 0. : tor_flux_n.back()) +
-                                 util::integrate_coarse(
-                                     safety_factor_intp,
-                                     ri == 0 ? 0.
-                                             : (contours[ri - 1].flux() -
-                                                g_file_data.flux_magnetic_axis),
-                                     psi) /
-                                     flux_unit);
+            tor_flux_n.push_back(
+                (ri == 0 ? 0. : tor_flux_n.back()) +
+                util::integrate_coarse(
+                    safety_factor_intp,
+                    ri == 0 ? 0. : (contours[ri - 1].flux() - psi_ma_intp),
+                    psi) /
+                    flux_unit);
             // r_minor defined as distance from magnetic axis at weak field side
             // this value is always normalized to R0
             r_minor_n.push_back(r_geo_intp(0.) / R0 - 1.);
