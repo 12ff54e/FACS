@@ -222,10 +222,34 @@
 
       download.addEventListener("click", (e) => {
         e.preventDefault();
-        const lines = FS.readFile("/continuum", { encoding: "utf8" });
+        const data = FS.readFile("/continuum", { encoding: "utf8" });
+        const lines = data.slice(data.indexOf("\n") + 1);
+
+        // create json output
+        const output = {
+          "lines": lines.split('\n')
+            .filter(line => line.length > 0)
+            .map(line => {
+              const line_data = line.split(' ').map(parseFloat);
+              return {
+                "toroidal-mode-number": line_data[0],
+                "continuum-zone": line_data[1],
+                "points": line_data.slice(2).reduce((acc, cur, idx) => {
+                  if(idx % 2 ==0) {
+                    acc.push([cur]);
+                  } else {
+                    acc.at(-1).push(cur);
+                  }
+                  return acc;
+                }, [])
+              }
+            }),
+          "psi-wall": parseFloat(data)
+        };
 
         const link = document.createElement("a");
-        const blob = new Blob([lines], { type: "text/plain" });
+        // const blob = new Blob([data], { type: "text/plain" });
+        const blob = new Blob([JSON.stringify(output)], { type: "application/json" });
         link.href = URL.createObjectURL(blob);
         link.download = `continuum-${gfile_filename}`;
         link.style.display = 'none';

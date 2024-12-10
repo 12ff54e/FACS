@@ -83,6 +83,9 @@ struct State {
     // result
     std::unordered_map<std::pair<int, int>, std::vector<std::array<double, 2>>>
         lines;
+
+    // extra info
+    double psi_max;
 };
 
 auto& get_state() {
@@ -441,6 +444,7 @@ void gfile_to_continuum_lines() {
 
     const NumericEquilibrium<double> equilibrium(
         gfile_data, input.radial_grid_num, poloidal_sample_point, psi_ratio);
+    get_state().psi_max = equilibrium.psi_range().second;
 
     timer.pause();
 
@@ -464,6 +468,7 @@ void output() {
                   << " for write.";
         std::exit(ENOENT);
     }
+    output << get_state().psi_max << '\n';
     for (auto& line : get_state().lines) {
         const auto& [nm, coords] = line;
         output << nm.first << ' ' << nm.second << ' ';
@@ -513,21 +518,7 @@ void draw_pts() {
 int main(int argc, char** argv) {
 #ifdef __EMSCRIPTEN__
     // clear state since main might be called multiple times
-    get_state().finish_calculation = false;
-    get_state().stats_printed = false;
-
-    get_state().last_radial_idx = 0;
-    get_state().current_radial_idx = 0;
-    get_state().total_offset = 0;
-    get_state().r_sample_pts.clear();
-
-    get_state().input = {};
-    get_state().ns.clear();
-    get_state().psi_sample_pts.clear();
-    get_state().m_ranges.clear();
-    get_state().continuum.clear();
-
-    get_state().lines.clear();
+    get_state() = {};
 
     Timer::get_timer().reset();
 #endif
