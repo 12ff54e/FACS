@@ -28,6 +28,8 @@ jobs:
       - name: Update cf-page branch
         working-directory: ${{github.workspace}}
         run: |
+          git fetch origin refs/heads/cf-page:refs/remotes/origin/cf-page
+          git remote set-branches --add origin cf-page
           git switch cf-page
           cp build/web/index.* ./
           git add .
