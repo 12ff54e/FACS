@@ -30,6 +30,7 @@ emscripten_lock_t lock = EMSCRIPTEN_LOCK_T_STATIC_INITIALIZER;
 #include "timer.h"
 
 constexpr double psi_ratio = 1.;
+constexpr std::size_t radial_sample_point = 1024;
 constexpr std::size_t poloidal_sample_point = 256;
 
 // inject hash function for pair of int
@@ -51,6 +52,7 @@ struct Input {
     std::string toroidal_mode_num_str;
 
     bool omega_limit_by_value() const { return max_continuum_zone == 0; }
+    bool adaptive_radial_grid() const { return radial_grid_num == 0; }
 };
 
 // every member should be zero-initialized, which is exactly the behavior of
@@ -101,11 +103,10 @@ void calculate_continuum(const auto& equilibrium) {
     auto& timer = Timer::get_timer();
 
     const auto [psi_min, psi_max] = equilibrium.psi_range();
-    const std::size_t radial_count = equilibrium.radial_grid_num();
 
     // position of local extrema of q
     std::vector<double> q_local_extrema_pos;
-    const auto delta_psi = (psi_max - psi_min) / radial_count;
+    const auto delta_psi = (psi_max - psi_min) / radial_sample_point;
     double q_min_psi;
     double q_min = std::numeric_limits<double>::infinity();
     for (double psi = psi_min; psi < psi_max; psi += delta_psi) {
@@ -309,11 +310,19 @@ void calculate_continuum(const auto& equilibrium) {
     }
 #endif
 
+    auto get_psi_evenly = [n = get_state().input.radial_grid_num,
+                           psi_max](auto idx) {
+        return std::pow(static_cast<double>(idx) / n, 2) * psi_max;
+    };
+
     // TODO: Equilibrium value near magnetic axis is calculated by linear
     // interpolation, which might be awfully inaccurate. Consider using Miller
     // model to approximate equlibrium
+    std::size_t idx = 0;
     for (double psi = 0; psi < psi_max;
-         psi = get_next_psi(psi, 1. / (n_max * pt_per_radial_period))) {
+         psi = get_state().input.adaptive_radial_grid()
+                   ? get_next_psi(psi, 1. / (n_max * pt_per_radial_period))
+                   : get_psi_evenly(idx++)) {
         timer.pause_last_and_start_next("Calculate Floquet exponent");
         auto local_omega_nu = calculate_local_floquet_func(psi);
         timer.pause_last_and_start_next("Solve for omega");
@@ -443,7 +452,7 @@ void gfile_to_continuum_lines() {
     }
 
     const NumericEquilibrium<double> equilibrium(
-        gfile_data, input.radial_grid_num, poloidal_sample_point, psi_ratio);
+        gfile_data, radial_sample_point, poloidal_sample_point, psi_ratio);
     get_state().psi_max = equilibrium.psi_range().second;
 
     timer.pause();
@@ -540,7 +549,6 @@ int main(int argc, char** argv) {
         "Specify the path of output file, default to '$PWD/continuum-${input "
         "file name}'")
 
-    // TODO: implement the fixed radial grid num option
     CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
         radial_grid_num, "--radial-grid-num",
         "Number of radial grid. Radial grid will be determined adaptively if "
@@ -551,7 +559,6 @@ int main(int argc, char** argv) {
     CLAP_END(Input)
 
     auto& input = get_state().input;
-    input.radial_grid_num = 1024;
 
     try {
         CLAP<Input>::parse_input(input, argc, argv);
