@@ -35,6 +35,5 @@ jobs:
           git add .
           git config --add user.name github-action-bot
           git config --add user.email noreply@fake.domain.com
-          git commit -m "update cloudflare deployment" -m "${{github.sha}}"
-          git push
+          git commit -m "update cloudflare deployment" -m "${{github.sha}}" && git push || echo ""
 
