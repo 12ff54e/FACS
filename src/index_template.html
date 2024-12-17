@@ -1,0 +1,313 @@
+<!doctype html>
+<html lang="en-us">
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+    <title>Emscripten-Generated Code</title>
+    <style>
+      .emscripten { padding-right: 0; margin-left: auto; margin-right: auto; display: block; }
+      textarea.emscripten { font-family: monospace; width: 80%; }
+      div.emscripten { text-align: center; }
+      div.emscripten_border { border: 1px solid black; }
+      /* the canvas *must not* have any border or padding, or mouse coords will be wrong */
+      canvas.emscripten { border: 0px none; background-color: black; }
+
+      .spinner {
+        height: 50px;
+        width: 50px;
+        margin: 0px auto;
+        -webkit-animation: rotation .8s linear infinite;
+        -moz-animation: rotation .8s linear infinite;
+        -o-animation: rotation .8s linear infinite;
+        animation: rotation 0.8s linear infinite;
+        border-left: 10px solid rgb(0,150,240);
+        border-right: 10px solid rgb(0,150,240);
+        border-bottom: 10px solid rgb(0,150,240);
+        border-top: 10px solid rgb(100,0,200);
+        border-radius: 100%;
+        background-color: rgb(200,100,250);
+      }
+      @-webkit-keyframes rotation {
+        from {-webkit-transform: rotate(0deg);}
+        to {-webkit-transform: rotate(360deg);}
+      }
+      @-moz-keyframes rotation {
+        from {-moz-transform: rotate(0deg);}
+        to {-moz-transform: rotate(360deg);}
+      }
+      @-o-keyframes rotation {
+        from {-o-transform: rotate(0deg);}
+        to {-o-transform: rotate(360deg);}
+      }
+      @keyframes rotation {
+        from {transform: rotate(0deg);}
+        to {transform: rotate(360deg);}
+      }
+
+      #input {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+        row-gap: 10px;
+        column-gap: 5px;
+        align-items: center;
+      }
+
+      #input > div {
+        margin: 5px;
+        padding: 5px 0px;
+      }
+    </style>
+  </head>
+  <body>
+    <hr/>
+    <figure style="overflow:visible;" id="spinner"><div class="spinner"></div><center style="margin-top:0.5em"><strong>emscripten</strong></center></figure>
+    <div class="emscripten" id="status">Downloading...</div>
+    <div class="emscripten">
+      <progress value="0" max="100" id="progress" hidden=1></progress>
+    </div>
+    <form class="emscripten" id="input">
+      <div>
+        <input type="file" id="gfile" name="gfile" required />
+      </div>
+      <div>
+        <button id="download" disabled>Download data</button>
+      </div>
+      <div
+        style="
+          grid-column: auto / span 2;
+          display: flex;
+          justify-content: space-evenly;
+          border: threedface groove 2px;
+        "
+      >
+        <fieldset style="border: none">
+          <div>
+            <input type="radio" name="omega-limit-type" value="--max-continuum-zone" checked />
+            <label for="--max-continuum-zone">Continuum Zone</label>
+          </div>
+          <div>
+            <input type="radio" name="omega-limit-type" value="--max-value" />
+            <label for="--max-value">Value</label>
+          </div>
+        </fieldset>
+        <div>
+          <input type="number" id="max-omega" name="max-omega" step="any" required/>
+        </div>
+      </div>
+      <div>
+        <input type="number" id="radial-grid-num" name="--radial-grid-num" value="0" required />
+        <label for="--radial-grid-num">Radial grid number (0 means adaptive)</label>
+      </div>
+      <div>
+        <input type="text" id="toroidal-mode" name="--toroidal-mode-number" required />
+        <label for="--toroidal-mode-number">Toroidal mode number</label>
+      </div>
+      <div>
+        <input type="hidden" name="--output-path" value="/continuum" />
+        <input type="submit" value="Start!"/>
+      </div>
+    </form>
+    <div class="emscripten_border">
+      <canvas class="emscripten" id="canvas" oncontextmenu="event.preventDefault()" tabindex=-1 width=1200 height=400></canvas>
+    </div>
+    <hr/>
+    <textarea class="emscripten" id="output" rows="8"></textarea>
+    <hr>
+    <script type='text/javascript'>
+      var statusElement = document.getElementById('status');
+      var progressElement = document.getElementById('progress');
+      var spinnerElement = document.getElementById('spinner');
+
+      var Module = {
+        print: (function() {
+          var element = document.getElementById('output');
+          if (element) element.value = ''; // clear browser cache
+          return (...args) => {
+            var text = args.join(' ');
+            // These replacements are necessary if you render to raw HTML
+            //text = text.replace(/&/g, "&amp;");
+            //text = text.replace(/</g, "&lt;");
+            //text = text.replace(/>/g, "&gt;");
+            //text = text.replace('\n', '<br>', 'g');
+            console.log(text);
+            if (element) {
+              element.value += text + "\n";
+              element.scrollTop = element.scrollHeight; // focus on bottom
+            }
+          };
+        })(),
+        canvas: (() => {
+          var canvas = document.getElementById('canvas');
+
+          // As a default initial behavior, pop up an alert when webgl context is lost. To make your
+          // application robust, you may want to override this behavior before shipping!
+          // See http://www.khronos.org/registry/webgl/specs/latest/1.0/#5.15.2
+          canvas.addEventListener("webglcontextlost", (e) => { alert('WebGL context lost. You will need to reload the page.'); e.preventDefault(); }, false);
+
+          return canvas;
+        })(),
+        setStatus: (text) => {
+          Module.setStatus.last ??= { time: Date.now(), text: '' };
+          if (text === Module.setStatus.last.text) return;
+          var m = text.match(/([^(]+)\((\d+(\.\d+)?)\/(\d+)\)/);
+          var now = Date.now();
+          if (m && now - Module.setStatus.last.time < 30) return; // if this is a progress update, skip it if too soon
+          Module.setStatus.last.time = now;
+          Module.setStatus.last.text = text;
+          if (m) {
+            text = m[1];
+            progressElement.value = parseInt(m[2])*100;
+            progressElement.max = parseInt(m[4])*100;
+            progressElement.hidden = false;
+            spinnerElement.hidden = false;
+          } else {
+            progressElement.value = null;
+            progressElement.max = null;
+            progressElement.hidden = true;
+            if (!text) spinnerElement.hidden = true;
+          }
+          statusElement.innerHTML = text;
+        },
+        totalDependencies: 0,
+        monitorRunDependencies: (left) => {
+          this.totalDependencies = Math.max(this.totalDependencies, left);
+          Module.setStatus(left ? 'Preparing... (' + (this.totalDependencies-left) + '/' + this.totalDependencies + ')' : 'All downloads complete.');
+        },
+      };
+      Module.setStatus('Downloading...');
+      window.onerror = () => {
+        Module.setStatus('Exception thrown, see JavaScript console');
+        spinnerElement.style.display = 'none';
+        Module.setStatus = (text) => {
+          if (text) console.error('[post-exception status] ' + text);
+        };
+      };
+
+      const canvas = document.getElementById("canvas");
+      const ctx = canvas.getContext("2d");
+
+      const width = canvas.width;
+      const height = canvas.height;
+      ctx.fillStyle = "white";
+      ctx.fillRect(0, 0, width, height);
+
+      let gfile_filename;
+      let max_omega;
+      const input_form = document.getElementById("input");
+      const download = document.getElementById("download");
+
+      input_form.addEventListener("submit", function(e){
+        e.preventDefault();
+
+        download.disabled = true;
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, width, height);
+
+        const form_data = new FormData(e.target);
+
+        form_data.set(form_data.get("omega-limit-type"),
+          form_data.get("max-omega"));
+        form_data.delete("omega-limit-type");
+        form_data.delete("max-omega");
+
+        const gfile = form_data.get("gfile");
+        form_data.delete("gfile");
+        const args = ['/gfile'];
+        for(const [name, value] of form_data.entries()) {
+            args.push(name, value);
+        }
+
+        gfile_filename = gfile.name;
+        gfile.arrayBuffer().then(ab => {
+          FS.writeFile("/gfile", new Uint8Array(ab));
+          Module.callMain(args);
+         }).catch(err => { console.log(err); });
+      })
+
+      download.addEventListener("click", (e) => {
+        e.preventDefault();
+        const data = FS.readFile("/continuum", { encoding: "utf8" });
+        const lines = data.slice(data.indexOf("\n") + 1);
+
+        // create json output
+        const output = {
+          "lines": lines.split('\n')
+            .filter(line => line.length > 0)
+            .map(line => {
+              const line_data = line.split(' ').map(parseFloat);
+              return {
+                "toroidal-mode-number": line_data[0],
+                "continuum-zone": line_data[1],
+                "points": line_data.slice(2).reduce((acc, cur, idx) => {
+                  if(idx % 2 ==0) {
+                    acc.push([cur]);
+                  } else {
+                    acc.at(-1).push(cur);
+                  }
+                  return acc;
+                }, [])
+              }
+            }),
+          "psi-wall": parseFloat(data)
+        };
+
+        const link = document.createElement("a");
+        // const blob = new Blob([data], { type: "text/plain" });
+        const blob = new Blob([JSON.stringify(output)], { type: "application/json" });
+        link.href = URL.createObjectURL(blob);
+        link.download = `continuum-${gfile_filename}`;
+        link.style.display = 'none';
+
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      });
+
+      function draw_point(r, m_ptr, m_len, w_ptr) {
+        const color_list = [
+          'rgb(93,129,180)',
+          'rgb(224,155,36)',
+          'rgb(142,176,49)',
+          'rgb(235,98,53)',
+          'rgb(134,120,178)',
+          'rgb(196,110,26)',
+          'rgb(92,157,199)',
+          'rgb(255,191,0)'];
+
+        const offset_32 = m_ptr / Int32Array.BYTES_PER_ELEMENT;
+        const m_ranges = Module.HEAP32.subarray(offset_32, offset_32 + m_len);
+        const data = Module.HEAPF64.subarray(w_ptr / Float64Array.BYTES_PER_ELEMENT);
+        const ws = [];
+
+        let local_offset = 0;
+        let color_idx = 0;
+        // iterate toroidal mode number
+        for(let i = 0; i < m_ranges.length / 2; ++i) {
+            // iterate poloidal mode number
+            const ws = []; // ws store omega of one toroidal number
+            for(let j = 0; j <= m_ranges[2*i+1] - m_ranges[2*i]; ++j) {
+                ws.push(data[local_offset++]);
+            }
+            ws.sort();
+            for(const w of ws) {
+              ctx.fillStyle = color_list[color_idx++ % color_list.length];
+              ctx.beginPath();
+              ctx.ellipse(r * width, (1 - w / max_omega) * height, 3, 3, 0, 0, 2 * Math.PI);
+              ctx.fill();
+            }
+        }
+        return local_offset;
+      }
+
+      function enable_download() {
+        download.disabled = false;
+      }
+
+      function set_max_omega(w) {
+        max_omega = w;
+      }
+
+    </script>
+    {{{ SCRIPT }}}
+  </body>
+</html>

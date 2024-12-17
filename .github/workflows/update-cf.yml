@@ -1,0 +1,40 @@
+name: Build emscripten project and deploy
+
+on:
+  push:
+    branches: [ "wasm" ]
+  pull_request:
+    branches: [ "main" ]
+
+  # Allows you to run this workflow manually from the Actions tab
+  workflow_dispatch:
+
+jobs:
+  update:
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Setup Emscripten toolchain
+        uses: mymindstorm/setup-emsdk@v12
+
+      - name: Build the web app
+        working-directory: ${{github.workspace}}
+        run: ./build_web.sh
+
+      - name: Update cf-page branch
+        working-directory: ${{github.workspace}}
+        run: |
+          git fetch origin refs/heads/cf-page:refs/remotes/origin/cf-page
+          git remote set-branches --add origin cf-page
+          git switch cf-page
+          cp build/web/index.* ./
+          git add .
+          git config --add user.name github-action-bot
+          git config --add user.email noreply@fake.domain.com
+          git commit -m "update cloudflare deployment" -m "${{github.sha}}"
+          git push
+

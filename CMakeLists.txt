@@ -42,3 +42,23 @@ add_compile_definitions(INTP_CELL_LAYOUT)
 
 add_executable(facs src/main.cpp src/gFileRawData.cpp)
 target_include_directories(facs PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+
+add_executable(index EXCLUDE_FROM_ALL)
+set_target_properties(index PROPERTIES SUFFIX .html)
+target_sources(index PRIVATE src/main src/gFileRawData.cpp)
+target_include_directories(index PRIVATE $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+
+# specify html template
+string(JOIN "" shell_file ${CMAKE_CURRENT_SOURCE_DIR}/src/index_template.html)
+target_link_options(index PUBLIC --shell-file ${shell_file})
+set_property(TARGET index PROPERTY LINK_DEPENDS ${shell_file})
+# allow exceptions
+target_compile_options(index PUBLIC -fwasm-exceptions)
+target_link_options(index PUBLIC -fwasm-exceptions)
+# Don't run main function at startup
+target_link_options(index PUBLIC -sINVOKE_RUN=0 -sEXPORTED_RUNTIME_METHODS=[callMain])
+# memory settings
+target_link_options(index PUBLIC -sALLOW_MEMORY_GROWTH=1)
+# wasm worker
+target_compile_options(index PUBLIC -sWASM_WORKERS=1)
+target_link_options(index PUBLIC -sWASM_WORKERS=1)

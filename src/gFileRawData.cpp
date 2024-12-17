@@ -6,11 +6,15 @@
 #include "gFileRawData.h"
 #include "util.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/console.h>
+#endif
+
 bool GFileRawData::is_complete() const noexcept {
     return complete_;
 }
 
-std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
+std::istream& operator>>(std::istream& is, GFileRawData& g) {
     std::string s_dum;
     std::string line;
     std::stringstream ss_line;
@@ -20,7 +24,7 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
     std::getline(is, line);
     ss_line.str(line);
     ss_line.read(g.metadata.begin(), 48);
-    char str_tmp[4];
+    char str_tmp[5]{};
     ss_line.read(str_tmp, 4);
     ss_line.read(str_tmp, 4);
     g.nw = static_cast<unsigned>(atoi(str_tmp));
@@ -31,8 +35,17 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
         g.extra_metadata =
             std::string(std::istreambuf_iterator<char>(ss_line), {});
     }
+
+    auto print = [](auto msg) {
+#ifdef __EMSCRIPTEN__
+        emscripten_out(msg);
+#else
+        std::cout << msg;
+#endif
+    };
+
     if (ss_line.fail()) {
-        std::cout << "Data corruption at 1st line.\n";
+        print("Data corruption at 1st line.\n");
         return is;
     }
 
@@ -42,7 +55,7 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
     ss_line.str(line);
     ss_line >> g.dim.x() >> g.dim.y() >> g.r_center >> g.r_left >> g.z_mid;
     if (ss_line.fail()) {
-        std::cout << "Data corruption at 2nd line.\n";
+        print("Data corruption at 2nd line.\n");
         return is;
     }
     // 3rd line
@@ -52,7 +65,7 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
     ss_line >> g.magnetic_axis.x() >> g.magnetic_axis.y() >>
         g.flux_magnetic_axis >> g.flux_LCFS >> g.b_center;
     if (ss_line.fail()) {
-        std::cout << "Data corruption at 3rd line.\n";
+        print("Data corruption at 3rd line.\n");
         return is;
     }
     // 4th line
@@ -61,7 +74,7 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
     ss_line.str(line);
     ss_line >> g.current >> d_dum >> d_dum >> d_dum >> d_dum;
     if (ss_line.fail()) {
-        std::cout << "Data corruption at 4th line.\n";
+        print("Data corruption at 4th line.\n");
         return is;
     }
     // 5th line
@@ -70,7 +83,7 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
     ss_line.str(line);
     ss_line >> d_dum >> d_dum >> g.flux_sep >> g.sep.x() >> g.sep.y();
     if (ss_line.fail()) {
-        std::cout << "Data corruption at 5th line.\n";
+        print("Data corruption at 5th line.\n");
         return is;
     }
 
@@ -86,25 +99,25 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
     // poloidal current
     read_vec(g.nw, g.f_pol);
     if (is.fail()) {
-        std::cout << "Data corruption at poloidal current.\n";
+        print("Data corruption at poloidal current.\n");
         return is;
     }
     // pressure
     read_vec(g.nw, g.pressure);
     if (is.fail()) {
-        std::cout << "Data corruption at pressure.\n";
+        print("Data corruption at pressure.\n");
         return is;
     }
     // f*f^{\prime}
     read_vec(g.nw, g.f_f_prime);
     if (is.fail()) {
-        std::cout << "Data corruption at f*f'.\n";
+        print("Data corruption at f*f'.\n");
         return is;
     }
     // p^{\prime}
     read_vec(g.nw, g.p_prime);
     if (is.fail()) {
-        std::cout << "Data corruption at p'.\n";
+        print("Data corruption at p'.\n");
         return is;
     }
     // flux
@@ -113,19 +126,19 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
         for (unsigned i = 0; i < g.nw; ++i) { is >> g.flux(i, j); }
     }
     if (is.fail()) {
-        std::cout << "Data corruption at \\psi(r,z).\n";
+        print("Data corruption at \\psi(r,z).\n");
         return is;
     }
     // safety factor
     read_vec(g.nw, g.safety_factor);
     if (is.fail()) {
-        std::cout << "Data corruption at q.\n";
+        print("Data corruption at q.\n");
         return is;
     }
     // # boundary point and # limiter point
     is >> g.boundary_num >> g.limiter_num;
     if (is.fail()) {
-        std::cout << "Data corruption at boundary number or limiter number.\n";
+        print("Data corruption at boundary number or limiter number.\n");
         return is;
     }
     // boundary points
@@ -135,7 +148,7 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
         g.boundary.emplace_back(rr, zz);
     }
     if (is.fail()) {
-        std::cout << "Data corruption at boundary points.\n";
+        print("Data corruption at boundary points.\n");
         return is;
     }
 
@@ -148,7 +161,7 @@ std::ifstream& operator>>(std::ifstream& is, GFileRawData& g) {
         g.limiter.emplace_back(rr, zz);
     }
     if (is.fail()) {
-        std::cout << "Data corruption at limiter points.\n";
+        print("Data corruption at limiter points.\n");
         return is;
     }
 
