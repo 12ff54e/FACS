@@ -126,8 +126,8 @@ class Spdata {
         intp::InterpolationFunction<value_type, 2u, ORDER_, coord_type>
             flux_function(
                 g_file_data.flux,
-                std::make_pair(g_file_data.r_center - .5 * g_file_data.dim.x(),
-                               g_file_data.r_center + .5 * g_file_data.dim.x()),
+                std::make_pair(g_file_data.r_left,
+                               g_file_data.r_left + g_file_data.dim.x()),
                 std::make_pair(g_file_data.z_mid - .5 * g_file_data.dim.y(),
                                g_file_data.z_mid + .5 * g_file_data.dim.y()));
 
@@ -222,16 +222,6 @@ class Spdata {
             value_type f = poloidal_current_intp(psi);
 
             return std::sqrt(f * f + dp_dr * dp_dr + dp_dz * dp_dz) / pt.x();
-        };
-
-        auto j_field = [&](Vec<2, value_type> pt, value_type) {
-            value_type dp_dr = flux_function.derivative(pt, {1, 0});
-            value_type dp_dz = flux_function.derivative(pt, {0, 1});
-            value_type r = pt.x();
-            pt -= g_file_data.magnetic_axis;
-            value_type r2 = pt.L2_norm_square_();
-
-            return r * r2 / (dp_dr * pt.x() + dp_dz * pt.y());
         };
 
         auto bp2j_field = [&](Vec<2, value_type> pt, value_type) {
