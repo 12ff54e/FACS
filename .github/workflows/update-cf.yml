@@ -2,7 +2,7 @@ name: Build emscripten project and deploy
 
 on:
   push:
-    branches: [ "wasm" ]
+    branches: [ "wasm", "main" ]
   pull_request:
     branches: [ "main" ]
 
