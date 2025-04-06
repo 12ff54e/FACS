@@ -49,6 +49,7 @@ struct Input {
     double max_omega_value;
     std::string gfile_path;
     std::string output_path;
+    std::string output_nu_path;
     std::string toroidal_mode_num_str;
 
     bool omega_limit_by_value() const { return max_continuum_zone == 0; }
@@ -314,7 +315,12 @@ void calculate_continuum(const auto& equilibrium) {
                            psi_max](auto idx) {
         return std::pow(static_cast<double>(idx) / n, 2) * psi_max;
     };
-
+#ifndef __EMSCRIPTEN__
+    std::ofstream nu_ofs;
+    if (get_state().input.output_nu_path.size() > 0) {
+        nu_ofs.open(get_state().input.output_nu_path);
+    }
+#endif
     // TODO: Equilibrium value near magnetic axis is calculated by linear
     // interpolation, which might be awfully inaccurate. Consider using Miller
     // model to approximate equlibrium
@@ -323,8 +329,19 @@ void calculate_continuum(const auto& equilibrium) {
          psi = get_state().input.adaptive_radial_grid()
                    ? get_next_psi(psi, 1. / (n_max * pt_per_radial_period))
                    : get_psi_evenly(idx++)) {
+        const auto local_q = equilibrium.safety_factor(psi);
         timer.pause_last_and_start_next("Calculate Floquet exponent");
         auto local_omega_nu = calculate_local_floquet_func(psi);
+#ifndef __EMSCRIPTEN__
+        if (nu_ofs.is_open()) {
+            nu_ofs << local_omega_nu.size();
+            for (const auto [omega, nu] : local_omega_nu) {
+                nu_ofs << ", " << omega << ", " << nu.real() << ", "
+                       << nu.imag();
+            }
+            nu_ofs << '\n';
+        }
+#endif
         timer.pause_last_and_start_next("Solve for omega");
         {
             std::ostringstream oss;
@@ -340,7 +357,6 @@ void calculate_continuum(const auto& equilibrium) {
         floquet_exponent_sample_pts += local_omega_nu.size();
 
         // calculate omega for each pair of mode numbers (n, m)
-        // change normalization of omega to v_{A,0}/R_0 here
         const auto local_max_nu = local_omega_nu.back().second.real();
 
 #ifdef __EMSCRIPTEN__
@@ -348,7 +364,6 @@ void calculate_continuum(const auto& equilibrium) {
         // syscall) when growing
         emscripten_lock_waitinf_acquire(&lock);
 #endif
-        const auto local_q = equilibrium.safety_factor(psi);
         for (std::size_t n_idx = 0; n_idx < ns.size(); ++n_idx) {
             auto n = ns[n_idx];
             std::size_t m_num = 0;
@@ -378,6 +393,7 @@ void calculate_continuum(const auto& equilibrium) {
                 } else if (it != local_omega_nu.end()) {
                     const auto [omega0, nu0] = *(it - 1);
                     const auto [omega1, nu1] = *it;
+                    // change normalization of omega to v_{A,0}/R_0 here
                     continuum.push_back(
                         (omega0 + (std::abs(kp) - nu0.real()) /
                                       (nu1.real() - nu0.real()) *
@@ -393,6 +409,9 @@ void calculate_continuum(const auto& equilibrium) {
 #endif
         psi_sample_pts.push_back(psi);
     }
+#ifndef __EMSCRIPTEN__
+    if (nu_ofs.is_open()) { nu_ofs.close(); };
+#endif
     {
         std::ostringstream oss;
         oss << "Samples " << psi_sample_pts.size()
@@ -548,6 +567,9 @@ int main(int argc, char** argv) {
         output_path, "--output-path", "-o",
         "Specify the path of output file, default to '$PWD/continuum-${input "
         "file name}'")
+    CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
+        output_nu_path, "--output-floquet-exponent-to",
+        "Specify the path of output file of Floquet exponent")
 
     CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
         radial_grid_num, "--radial-grid-num",
