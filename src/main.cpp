@@ -377,7 +377,11 @@ void calculate_continuum(const auto& equilibrium) {
                 auto it = std::lower_bound(
                     local_omega_nu.begin(), local_omega_nu.end(), std::abs(kp),
                     [](const auto& omega_nu, auto k) {
-                        return omega_nu.second.real() < k;
+                        // NOTE: Here I presume omega being half integer lies
+                        // inside gap region, which should be fine providing
+                        // that radial metric have tiny dc component.
+                        return omega_nu.second.real() < k ||
+                               omega_nu.first < .5 * std::floor(2 * k);
                     });
                 if (kp > 0. &&
                     std::abs(2 * kp - std::round(2 * kp)) < EPSILON) {
