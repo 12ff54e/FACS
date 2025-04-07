@@ -336,7 +336,7 @@ void calculate_continuum(const auto& equilibrium) {
         if (nu_ofs.is_open()) {
             nu_ofs << local_omega_nu.size();
             for (const auto [omega, nu] : local_omega_nu) {
-                nu_ofs << ", " << omega << ", " << nu.real() << ", "
+                nu_ofs << ' ' << omega / local_q << ' ' << nu.real() << ' '
                        << nu.imag();
             }
             nu_ofs << '\n';
