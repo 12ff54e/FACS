@@ -173,12 +173,15 @@ class Spdata {
         std::vector<Contour<value_type>> contours;
         contours.reserve(radial_sample);
         for (std::size_t i = 0; i < radial_sample; ++i) {
-            contours.emplace_back(
-                util::lerp(psi_delta_, psi_wall,
-                           static_cast<value_type>(i) /
-                               static_cast<value_type>(radial_sample - 1)) +
-                    psi_ma_intp,
-                flux_function, g_file_data);
+            const auto psi =
+                i == radial_sample - 1
+                    ? flux_boundary_min
+                    : util::lerp(
+                          psi_delta_, psi_wall,
+                          static_cast<value_type>(i) /
+                              static_cast<value_type>(radial_sample - 1)) +
+                          psi_ma_intp;
+            contours.emplace_back(psi, flux_function, g_file_data);
         }
 
         constexpr value_type magnetic_constant = 4.e-7 * M_PI;
