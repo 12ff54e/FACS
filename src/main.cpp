@@ -29,7 +29,6 @@ emscripten_lock_t lock = EMSCRIPTEN_LOCK_T_STATIC_INITIALIZER;
 #define ZQ_TIMER_IMPLEMENTATION
 #include "timer.h"
 
-constexpr double psi_ratio = 1.;
 constexpr std::size_t radial_sample_point = 1024;
 constexpr std::size_t poloidal_sample_point = 256;
 
@@ -47,6 +46,7 @@ struct Input {
     int max_continuum_zone;
     int radial_grid_num;
     double max_omega_value;
+    double psi_ratio;
     std::string gfile_path;
     std::string output_path;
     std::string output_nu_path;
@@ -103,7 +103,8 @@ void calculate_continuum(const auto& equilibrium) {
     using namespace std::complex_literals;
     auto& timer = Timer::get_timer();
 
-    const auto [psi_min, psi_max] = equilibrium.psi_range();
+    const auto [psi_min, psi_max_eq] = equilibrium.psi_range();
+    const auto psi_max = psi_max_eq * get_state().input.psi_ratio;
 
     // position of local extrema of q
     std::vector<double> q_local_extrema_pos;
@@ -346,7 +347,7 @@ void calculate_continuum(const auto& equilibrium) {
         {
             std::ostringstream oss;
             oss << "psi/psi_w = " << std::fixed << std::setprecision(4)
-                << psi / psi_max
+                << psi / psi_max_eq
                 << ", omega sample pt = " << local_omega_nu.size() << '\n';
 #ifdef __EMSCRIPTEN__
             emscripten_console_log(oss.str().c_str());
@@ -440,20 +441,20 @@ auto sort_points_into_lines(const auto& equilibrium) {
     const auto& psi_sample_pts = get_state().psi_sample_pts;
     const auto& m_ranges = get_state().m_ranges;
     // sort by Floquet exponent
-    for (std::size_t i = 0, continuum_idx = 0, m_idx = 0;
-         i < psi_sample_pts.size(); ++i) {
-        const auto psi = psi_sample_pts[i];
+    std::size_t cont_idx = 0;
+    std::size_t m_idx = 0;
+    for (auto psi : psi_sample_pts) {
+        const auto minor_radius = equilibrium.minor_radius(psi);
+        const auto q = equilibrium.safety_factor(psi);
         for (std::size_t j = 0; j < ns.size(); ++j) {
             auto m_lower = m_ranges[m_idx++];
             auto m_upper = m_ranges[m_idx++];
             for (int k = 0; k <= m_upper - m_lower; ++k) {
-                const int kp = std::floor(std::abs(
-                    .5 +
-                    std::floor(2 * (ns[j] * equilibrium.safety_factor(psi) -
-                                    (k + m_lower)))));
+                const int kp = std::floor(
+                    std::abs(.5 + std::floor(2 * (ns[j] * q - (k + m_lower)))));
                 lines[std::make_pair(ns[j], sort_by_m ? k + m_lower : kp)]
-                    .push_back({equilibrium.minor_radius(psi),
-                                get_state().continuum[continuum_idx++]});
+                    .push_back(
+                        {minor_radius, get_state().continuum[cont_idx++]});
             }
         }
     }
@@ -474,8 +475,9 @@ void gfile_to_continuum_lines() {
         std::exit(0);
     }
 
+    constexpr double psi_ratio_eq = 1.;
     const NumericEquilibrium<double> equilibrium(
-        gfile_data, radial_sample_point, poloidal_sample_point, psi_ratio);
+        gfile_data, radial_sample_point, poloidal_sample_point, psi_ratio_eq);
     get_state().psi_max = equilibrium.psi_range().second;
 
     timer.pause();
@@ -582,9 +584,13 @@ int main(int argc, char** argv) {
     CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
         toroidal_mode_num_str, "--toroidal-mode-number", "-n",
         "Toroidal mode number list, should be seperated by comma.")
+    CLAP_REGISTER_OPTION_WITH_DESCRIPTION(
+        psi_ratio, "--psi-ratio",
+        "Maximum poloidal flux relative to that on LCFS, default to be 1")
     CLAP_END(Input)
 
     auto& input = get_state().input;
+    input.psi_ratio = 1.;
 
     try {
         CLAP<Input>::parse_input(input, argc, argv);
@@ -600,8 +606,9 @@ int main(int argc, char** argv) {
         return ENOENT;
     }
     if (input.toroidal_mode_num_str.empty()) {
-        std::cout << "Specify at least one toroidal mode number.\n";
-        return EINVAL;
+        std::cout << "User do not specify toroidal mode number, use `-n 3,5` "
+                     "as default";
+        input.toroidal_mode_num_str = "3,5";
     }
     // parse toroidal mode numbers
     if (([](const auto& str, auto& ns) {
