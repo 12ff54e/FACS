@@ -626,13 +626,23 @@ int main(int argc, char** argv) {
         return EINVAL;
     }
 
-    if (input.output_path.empty()) {
-        // filename only will be treated as relative path to current working
-        // directory
-        input.output_path =
+    auto output_path = std::filesystem::path{input.output_path};
+    if (!output_path.has_filename()) {
+        const auto output_filename =
             std::string{"continuum-"} +
             std::filesystem::path{input.gfile_path}.filename().string();
+        output_path.replace_filename(output_filename);
+        input.output_path = output_path.string();
     }
+    auto output_nu_path = std::filesystem::path{input.output_nu_path};
+    if (!output_nu_path.empty() && !output_nu_path.has_filename()) {
+        const auto output_filename =
+            std::string{"floquet-exponent-"} +
+            std::filesystem::path{input.gfile_path}.filename().string();
+        output_nu_path.replace_filename(output_filename);
+        input.output_nu_path = output_nu_path.string();
+    }
+
     if (input.max_omega_value == 0 && input.max_continuum_zone == 0) {
         std::cout << "User do no specify maximum value of omega, use `-m 2` as "
                      "default.\n";
