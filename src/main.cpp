@@ -128,8 +128,6 @@ void calculate_continuum(const auto& equilibrium) {
         exit(1);
     }
 
-    auto& m_ranges = get_state().m_ranges;
-    auto& continuum = get_state().continuum;
     auto& psi_sample_pts = get_state().psi_sample_pts;
 
     const auto& ns = get_state().ns;
@@ -301,6 +299,55 @@ void calculate_continuum(const auto& equilibrium) {
         return local_omega_nu;
     };
 
+    const auto calculate_omega = [](const auto& local_omega_nu, auto local_q) {
+        const auto& ns = get_state().ns;
+        const auto local_max_nu = local_omega_nu.back().second.real();
+        auto& m_ranges = get_state().m_ranges;
+        auto& continuum = get_state().continuum;
+        for (std::size_t n_idx = 0; n_idx < ns.size(); ++n_idx) {
+            auto n = ns[n_idx];
+            std::size_t m_num = 0;
+            const int m_lower = std::ceil(n * local_q - local_max_nu);
+            const int m_upper = std::floor(n * local_q + local_max_nu);
+            m_ranges.push_back(m_lower);
+            m_ranges.push_back(m_upper);
+
+            for (int m = m_lower; m <= m_upper; ++m) {
+                const double kp = n * local_q - m;
+                auto it = std::lower_bound(
+                    local_omega_nu.begin(), local_omega_nu.end(), std::abs(kp),
+                    [](const auto& omega_nu, auto k) {
+                        // NOTE: Here I presume omega being half integer
+                        // lies inside gap region, which should be fine
+                        // providing that radial metric have tiny dc
+                        // component.
+                        return omega_nu.second.real() < k ||
+                               omega_nu.first < .5 * std::floor(2 * k);
+                    });
+                if (kp > 0. &&
+                    std::abs(2 * kp - std::round(2 * kp)) < EPSILON) {
+                    // accumulation point, belongs to nq-m>0 branch
+                    it = std::upper_bound(local_omega_nu.begin(),
+                                          local_omega_nu.end(), std::abs(kp),
+                                          [](auto k, const auto& omega_nu) {
+                                              return k < omega_nu.second.real();
+                                          });
+                }
+                if (it == local_omega_nu.begin()) {
+                    continuum.push_back(0.);
+                } else if (it != local_omega_nu.end()) {
+                    const auto [omega0, nu0] = *(it - 1);
+                    const auto [omega1, nu1] = *it;
+                    // change normalization of omega to v_{A,0}/R_0 here
+                    continuum.push_back(
+                        (omega0 + (std::abs(kp) - nu0.real()) /
+                                      (nu1.real() - nu0.real()) *
+                                      (omega1 - omega0)) /
+                        local_q);
+                }
+            }
+        }
+    };
 #ifdef __EMSCRIPTEN__
     if (!get_state().input.omega_limit_by_value()) {
         // estimate max omega, and inform js for preview purpose
@@ -358,56 +405,14 @@ void calculate_continuum(const auto& equilibrium) {
         }
         floquet_exponent_sample_pts += local_omega_nu.size();
 
-        // calculate omega for each pair of mode numbers (n, m)
-        const auto local_max_nu = local_omega_nu.back().second.real();
-
 #ifdef __EMSCRIPTEN__
         // This lock is necessary since vector might be moved (through memmove
         // syscall) when growing
         emscripten_lock_waitinf_acquire(&lock);
 #endif
-        for (std::size_t n_idx = 0; n_idx < ns.size(); ++n_idx) {
-            auto n = ns[n_idx];
-            std::size_t m_num = 0;
-            const int m_lower = std::ceil(n * local_q - local_max_nu);
-            const int m_upper = std::floor(n * local_q + local_max_nu);
-            m_ranges.push_back(m_lower);
-            m_ranges.push_back(m_upper);
+        // calculate omega for each pair of mode numbers (n, m)
+        calculate_omega(local_omega_nu, local_q);
 
-            for (int m = m_lower; m <= m_upper; ++m) {
-                const double kp = n * local_q - m;
-                auto it = std::lower_bound(
-                    local_omega_nu.begin(), local_omega_nu.end(), std::abs(kp),
-                    [](const auto& omega_nu, auto k) {
-                        // NOTE: Here I presume omega being half integer lies
-                        // inside gap region, which should be fine providing
-                        // that radial metric have tiny dc component.
-                        return omega_nu.second.real() < k ||
-                               omega_nu.first < .5 * std::floor(2 * k);
-                    });
-                if (kp > 0. &&
-                    std::abs(2 * kp - std::round(2 * kp)) < EPSILON) {
-                    // accumulation point, belongs to nq-m>0 branch
-                    it = std::upper_bound(local_omega_nu.begin(),
-                                          local_omega_nu.end(), std::abs(kp),
-                                          [](auto k, const auto& omega_nu) {
-                                              return k < omega_nu.second.real();
-                                          });
-                }
-                if (it == local_omega_nu.begin()) {
-                    continuum.push_back(0.);
-                } else if (it != local_omega_nu.end()) {
-                    const auto [omega0, nu0] = *(it - 1);
-                    const auto [omega1, nu1] = *it;
-                    // change normalization of omega to v_{A,0}/R_0 here
-                    continuum.push_back(
-                        (omega0 + (std::abs(kp) - nu0.real()) /
-                                      (nu1.real() - nu0.real()) *
-                                      (omega1 - omega0)) /
-                        local_q);
-                }
-            }
-        }
 #ifdef __EMSCRIPTEN__
         emscripten_lock_release(&lock);
         ++get_state().current_radial_idx;
