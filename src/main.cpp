@@ -335,7 +335,8 @@ void calculate_continuum(const auto& equilibrium) {
         auto local_omega_nu = calculate_local_floquet_func(psi);
 #ifndef __EMSCRIPTEN__
         if (nu_ofs.is_open()) {
-            nu_ofs << local_omega_nu.size();
+            nu_ofs << local_omega_nu.size() << ' '
+                   << equilibrium.minor_radius(psi);
             for (const auto [omega, nu] : local_omega_nu) {
                 nu_ofs << ' ' << omega / local_q << ' ' << nu.real() << ' '
                        << nu.imag();
