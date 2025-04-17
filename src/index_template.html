@@ -91,7 +91,7 @@
           </div>
         </fieldset>
         <div>
-          <input type="number" id="max-omega" name="max-omega" step="any" required/>
+          <input type="number" id="max-omega" name="max-omega" step="any" value="2" required/>
         </div>
       </div>
       <div>
@@ -100,7 +100,11 @@
       </div>
       <div>
         <input type="text" id="toroidal-mode" name="--toroidal-mode-number" required />
-        <label for="--toroidal-mode-number">Toroidal mode number</label>
+        <label for="--toroidal-mode-number">Toroidal mode number (comma separated list)</label>
+      </div>
+      <div>
+        <input type="number" step="any" id="psi-ratio" name="--psi-ratio" value="1" required />
+        <label for="--psi-ratio">Maximum radial position (psi/psi_wall)</label>
       </div>
       <div>
         <input type="hidden" name="--output-path" value="/continuum" />
@@ -255,7 +259,7 @@
         // const blob = new Blob([data], { type: "text/plain" });
         const blob = new Blob([JSON.stringify(output)], { type: "application/json" });
         link.href = URL.createObjectURL(blob);
-        link.download = `continuum-${gfile_filename}`;
+        link.download = `continuum-${gfile_filename}.json`;
         link.style.display = 'none';
 
         document.body.appendChild(link);
