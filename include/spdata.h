@@ -91,18 +91,14 @@ class Spdata {
            std::size_t radial_grid_num,
            std::size_t poloidal_grid_num,
            bool use_si = false,
-           std::size_t radial_sample = 256,
-           value_type psi_ratio = .99)
+           std::size_t radial_sample = 256)
         : use_si_(use_si),
           lsp_(radial_grid_num),
           lst_(poloidal_grid_num),
-          psi_delta_(psi_ratio *
-                     (g_file_data.flux_LCFS - g_file_data.flux_magnetic_axis) /
+          psi_delta_((g_file_data.flux_LCFS - g_file_data.flux_magnetic_axis) /
                      static_cast<value_type>(lsp_ - 1)),
           theta_delta_(2. * M_PI / static_cast<value_type>(lst_)),
-          spdata_raw_{generate_boozer_coordinate_(g_file_data,
-                                                  radial_sample,
-                                                  psi_ratio)},
+          spdata_raw_{generate_boozer_coordinate_(g_file_data, radial_sample)},
           spdata_intp_{spdata_raw_, *this,
                        std::make_index_sequence<FIELD_NUM_2D>{},
                        std::make_index_sequence<FIELD_NUM_1D>{}} {}
@@ -121,8 +117,7 @@ class Spdata {
     const SpdataIntp_ spdata_intp_;
 
     SpdataRaw_ generate_boozer_coordinate_(const GFileRawData& g_file_data,
-                                           std::size_t radial_sample,
-                                           value_type psi_ratio) {
+                                           std::size_t radial_sample) {
         intp::InterpolationFunction<value_type, 2u, ORDER_, coord_type>
             flux_function(
                 g_file_data.flux,
@@ -166,8 +161,7 @@ class Spdata {
 #endif
         }
         const value_type psi_bd = flux_boundary_min - psi_ma_intp;
-        const value_type psi_wall = psi_ratio * psi_bd;
-        psi_delta_ = psi_wall / static_cast<value_type>(lsp_ - 1);
+        psi_delta_ = psi_bd / static_cast<value_type>(lsp_ - 1);
 
         // contours are from \\Delta\\psi to LCFS
         std::vector<Contour<value_type>> contours;
@@ -177,7 +171,7 @@ class Spdata {
                 i == radial_sample - 1
                     ? flux_boundary_min
                     : util::lerp(
-                          psi_delta_, psi_wall,
+                          psi_delta_, psi_bd,
                           static_cast<value_type>(i) /
                               static_cast<value_type>(radial_sample - 1)) +
                           psi_ma_intp;

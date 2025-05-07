@@ -43,14 +43,12 @@ struct NumericEquilibrium : Spdata<T> {
 
     NumericEquilibrium(const GFileRawData& g_file_data,
                        std::size_t radial_grid_num,
-                       std::size_t poloidal_grid_num,
-                       value_type psi_ratio = .98)
+                       std::size_t poloidal_grid_num)
         : Spdata<value_type>(g_file_data,
                              radial_grid_num,
                              poloidal_grid_num,
                              false,
-                             radial_grid_num < 256 ? radial_grid_num : 256,
-                             psi_ratio) {}
+                             radial_grid_num < 256 ? radial_grid_num : 256) {}
     // No need to construct too many magnetic surfaces, 256 should be more than
     // necessary
 

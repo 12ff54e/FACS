@@ -481,9 +481,8 @@ void gfile_to_continuum_lines() {
         std::exit(0);
     }
 
-    constexpr double psi_ratio_eq = 1.;
     const NumericEquilibrium<double> equilibrium(
-        gfile_data, radial_sample_point, poloidal_sample_point, psi_ratio_eq);
+        gfile_data, radial_sample_point, poloidal_sample_point);
     get_state().psi_max = equilibrium.psi_range().second;
 
     timer.pause();
