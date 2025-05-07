@@ -279,8 +279,10 @@
           'rgb(255,191,0)'];
 
         const offset_32 = m_ptr / Int32Array.BYTES_PER_ELEMENT;
-        const m_ranges = Module.HEAP32.subarray(offset_32, offset_32 + m_len);
-        const data = Module.HEAPF64.subarray(w_ptr / Float64Array.BYTES_PER_ELEMENT);
+        const mem_i32 = Module.HEAP32?Module.HEAP32:HEAP32;
+        const mem_f64 = Module.HEAPF64?Module.HEAPF64:HEAPF64;
+        const m_ranges = mem_i32.subarray(offset_32, offset_32 + m_len);
+        const data = mem_f64.subarray(w_ptr / Float64Array.BYTES_PER_ELEMENT);
         const ws = [];
 
         let local_offset = 0;
