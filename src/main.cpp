@@ -287,7 +287,9 @@ void calculate_continuum(const auto& equilibrium) {
                 // stopping criteria using continuum zone
                 if (!omega_limit_by_value &&
                     (order == max_continuum_zone - 1 &&
-                         (last_real < EPSILON || .5 - last_real < EPSILON) ||
+                         (.5 * static_cast<double>(max_continuum_zone) -
+                              nu.real() <
+                          EPSILON) ||
                      order == max_continuum_zone)) {
                     // end outer loop too
                     finish_calc_nu = true;
